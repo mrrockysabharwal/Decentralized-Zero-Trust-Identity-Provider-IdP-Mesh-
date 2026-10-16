@@ -8,8 +8,9 @@
     <title>Login | TrustMesh</title>
 
     <!-- Bootstrap -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          rel="stylesheet">
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet">
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="login.css">
@@ -19,7 +20,7 @@
 
     <div class="login-container">
 
-        <!-- Left Section -->
+        <!-- LEFT SECTION -->
         <div class="login-info">
 
             <a href="index.html" class="brand-name">
@@ -27,6 +28,7 @@
             </a>
 
             <div class="info-content">
+
                 <span class="security-badge">
                     🔐 Secure Identity
                 </span>
@@ -47,6 +49,7 @@
                     <div>✓ Secure access management</div>
                     <div>✓ Decentralized trust</div>
                 </div>
+
             </div>
 
             <p class="copyright">
@@ -56,7 +59,7 @@
         </div>
 
 
-        <!-- Right Section -->
+        <!-- RIGHT SECTION -->
         <div class="login-form-section">
 
             <div class="login-card">
@@ -65,68 +68,71 @@
                     🔑
                 </div>
 
-                <h2>Welcome Back</h2>
+                <span class="form-eyebrow">
+                    ZERO TRUST IDENTITY MESH
+                </span>
+
+                <h2>Passwordless Login</h2>
 
                 <p class="login-subtitle">
-                    Sign in to access your identity dashboard.
+                    Sign in securely using your device's authenticator
+                    or security key. No password required.
                 </p>
 
+
+                <!-- PASSWORDLESS FORM -->
                 <form id="loginForm">
 
-                    <!-- Email -->
                     <div class="mb-4">
+
                         <label for="email" class="form-label">
-                            Email Address
+                            Account email or username
                         </label>
 
                         <input
-                            type="email"
+                            type="text"
                             class="form-control custom-input"
                             id="email"
-                            placeholder="you@example.com"
+                            name="username"
+                            placeholder="Enter your username"
                             autocomplete="username"
                             required>
-                    </div>
-
-
-                    <!-- Password -->
-                    <div class="mb-3">
-                        <label for="password" class="form-label">
-                            Password
-                        </label>
-
-                        <input
-                            type="password"
-                            class="form-control custom-input"
-                            id="password"
-                            placeholder="Enter your password"
-                            autocomplete="current-password"
-                            required>
-                    </div>
-
-
-                    <!-- Remember and Forgot Password -->
-                    <div class="login-options">
-
-                        <label class="remember-me">
-                            <input type="checkbox" id="rememberMe">
-                            <span>Remember me</span>
-                        </label>
-
-                        <a href="#" id="forgotPassword">
-                            Forgot password?
-                        </a>
 
                     </div>
 
 
-                    <!-- Login Button -->
-                    <button type="submit" class="login-button">
-                        Sign In <span>→</span>
+                    <!-- REGISTER PASSKEY -->
+                    <button
+                        type="button"
+                        class="login-button"
+                        id="registerPasskey">
+
+                        Register Passkey <span>→</span>
+
                     </button>
 
-                    <div id="loginMessage" class="login-message"
-                         role="status" aria-live="polite"></div>
+
+                    <!-- LOGIN WITH PASSKEY -->
+                    <button
+                        type="button"
+                        class="passkey-login-button"
+                        id="loginPasskey">
+
+                        Log In with Passkey
+
+                    </button>
+
+
+                    <!-- STATUS MESSAGE -->
+                    <p
+                        id="loginMessage"
+                        class="login-message"
+                        role="status"
+                        aria-live="polite">
+
+                        Enter a username to begin.
+
+                    </p>
 
                 </form>
 
@@ -135,13 +141,16 @@
                     <span>SECURE IDENTITY ACCESS</span>
                 </div>
 
+
                 <p class="register-text">
                     Don't have an account?
                     <a href="register.html">Create account</a>
                 </p>
 
+
                 <p class="security-note">
-                    🛡️ Your security and privacy matter.
+                    🛡️ Your authenticator protects your private key.
+                    The server stores your public credential.
                 </p>
 
             </div>
@@ -150,29 +159,404 @@
 
     </div>
 
+
+    <!-- PASSKEY FRONTEND -->
     <script>
         const loginForm = document.getElementById("loginForm");
-        const loginMessage = document.getElementById("loginMessage");
+        const emailInput = document.getElementById("email");
 
-        loginForm.addEventListener("submit", function (event) {
-            event.preventDefault();
+        const registerButton =
+            document.getElementById("registerPasskey");
 
-            loginMessage.textContent =
-                "Login UI is working. Backend authentication is not connected yet.";
+        const loginButton =
+            document.getElementById("loginPasskey");
 
-            loginMessage.classList.add("show");
+        const loginMessage =
+            document.getElementById("loginMessage");
+
+
+        // Display status messages.
+        function showMessage(message, type = "") {
+            loginMessage.textContent = message;
+            loginMessage.className = "login-message show";
+
+            if (type) {
+                loginMessage.classList.add(type);
+            }
+        }
+
+
+        // Disable buttons while authentication is in progress.
+        function setLoading(loading) {
+            registerButton.disabled = loading;
+            loginButton.disabled = loading;
+
+            registerButton.innerHTML = loading
+                ? "Please wait..."
+                : 'Register Passkey <span>→</span>';
+
+            loginButton.textContent = loading
+                ? "Authenticating..."
+                : "Log In with Passkey";
+        }
+
+
+        // Validate the username.
+        function getUsername() {
+            const username = emailInput.value.trim();
+
+            if (!username) {
+                showMessage(
+                    "Please enter your email address or username.",
+                    "error"
+                );
+
+                emailInput.focus();
+                return null;
+            }
+
+            return username;
+        }
+
+
+        // Check browser support.
+        function checkPasskeySupport() {
+            if (
+                !window.isSecureContext ||
+                !window.PublicKeyCredential ||
+                !navigator.credentials
+            ) {
+                throw new Error(
+                    "Passkeys require a supported browser and a secure " +
+                    "connection. Use HTTPS or localhost."
+                );
+            }
+        }
+
+
+        // Convert Base64URL to bytes.
+        function base64urlToBytes(value) {
+            const base64 = value
+                .replace(/-/g, "+")
+                .replace(/_/g, "/");
+
+            const padded = base64.padEnd(
+                base64.length +
+                ((4 - base64.length % 4) % 4),
+                "="
+            );
+
+            const binary = atob(padded);
+
+            return Uint8Array.from(
+                binary,
+                character => character.charCodeAt(0)
+            );
+        }
+
+
+        // Convert bytes to Base64URL.
+        function bytesToBase64url(buffer) {
+            const bytes = new Uint8Array(buffer);
+
+            let binary = "";
+
+            for (const byte of bytes) {
+                binary += String.fromCharCode(byte);
+            }
+
+            return btoa(binary)
+                .replace(/\+/g, "-")
+                .replace(/\//g, "_")
+                .replace(/=/g, "");
+        }
+
+
+        // Send JSON to the backend.
+        async function sendRequest(url, data) {
+            const response = await fetch(url, {
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                credentials: "same-origin",
+
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(
+                    result.message ||
+                    result.error ||
+                    "The server could not complete your request."
+                );
+            }
+
+            return result;
+        }
+
+
+        // Handle errors without exposing internal details.
+        function handleError(error) {
+            console.error("Passkey operation failed:", error);
+
+            if (error.name === "NotAllowedError") {
+                showMessage(
+                    "Passkey operation cancelled or timed out.",
+                    "error"
+                );
+                return;
+            }
+
+            if (error instanceof TypeError) {
+                showMessage(
+                    "Could not connect to the authentication server. " +
+                    "Check your backend and API routes.",
+                    "error"
+                );
+                return;
+            }
+
+            showMessage(
+                error.message || "Something went wrong.",
+                "error"
+            );
+        }
+
+
+        // REGISTER A PASSKEY
+        registerButton.addEventListener("click", async function () {
+            const username = getUsername();
+
+            if (!username) {
+                return;
+            }
+
+            setLoading(true);
+
+            try {
+                checkPasskeySupport();
+
+                showMessage(
+                    "Preparing secure passkey registration..."
+                );
+
+                /*
+                 * Expected backend response:
+                 * PublicKeyCredentialCreationOptions
+                 * with Base64URL-encoded challenge and user.id.
+                 */
+                const options = await sendRequest(
+                    "/api/webauthn/register/options",
+                    { username }
+                );
+
+                if (!options.challenge || !options.user?.id) {
+                    throw new Error(
+                        "The server returned invalid registration options."
+                    );
+                }
+
+                options.challenge =
+                    base64urlToBytes(options.challenge);
+
+                options.user.id =
+                    base64urlToBytes(options.user.id);
+
+                if (options.excludeCredentials) {
+                    options.excludeCredentials =
+                        options.excludeCredentials.map(item => ({
+                            ...item,
+                            id: base64urlToBytes(item.id)
+                        }));
+                }
+
+                const credential =
+                    await navigator.credentials.create({
+                        publicKey: options
+                    });
+
+                if (!credential) {
+                    throw new Error(
+                        "Passkey registration was not completed."
+                    );
+                }
+
+                const result = await sendRequest(
+                    "/api/webauthn/register/verify",
+                    {
+                        username,
+
+                        credential: {
+                            id: credential.id,
+
+                            rawId: bytesToBase64url(
+                                credential.rawId
+                            ),
+
+                            type: credential.type,
+
+                            response: {
+                                clientDataJSON:
+                                    bytesToBase64url(
+                                        credential.response.clientDataJSON
+                                    ),
+
+                                attestationObject:
+                                    bytesToBase64url(
+                                        credential.response.attestationObject
+                                    ),
+
+                                transports:
+                                    credential.response.getTransports
+                                        ? credential.response.getTransports()
+                                        : []
+                            }
+                        }
+                    }
+                );
+
+                showMessage(
+                    result.message ||
+                    "Passkey registered successfully.",
+                    "success"
+                );
+
+            } catch (error) {
+                handleError(error);
+
+            } finally {
+                setLoading(false);
+            }
         });
 
-        document.getElementById("forgotPassword")
-            .addEventListener("click", function (event) {
-                event.preventDefault();
 
-                loginMessage.textContent =
-                    "Password recovery will be available after backend integration.";
+        // LOG IN USING A PASSKEY
+        loginButton.addEventListener("click", async function () {
+            const username = getUsername();
 
-                loginMessage.classList.add("show");
-            });
+            if (!username) {
+                return;
+            }
+
+            setLoading(true);
+
+            try {
+                checkPasskeySupport();
+
+                showMessage(
+                    "Waiting for your device authenticator..."
+                );
+
+                /*
+                 * Expected backend response:
+                 * PublicKeyCredentialRequestOptions
+                 * with a Base64URL-encoded challenge.
+                 */
+                const options = await sendRequest(
+                    "/api/webauthn/login/options",
+                    { username }
+                );
+
+                if (!options.challenge) {
+                    throw new Error(
+                        "The server returned invalid login options."
+                    );
+                }
+
+                options.challenge =
+                    base64urlToBytes(options.challenge);
+
+                if (options.allowCredentials) {
+                    options.allowCredentials =
+                        options.allowCredentials.map(item => ({
+                            ...item,
+                            id: base64urlToBytes(item.id)
+                        }));
+                }
+
+                const credential =
+                    await navigator.credentials.get({
+                        publicKey: options
+                    });
+
+                if (!credential) {
+                    throw new Error(
+                        "Passkey authentication was not completed."
+                    );
+                }
+
+                const result = await sendRequest(
+                    "/api/webauthn/login/verify",
+                    {
+                        username,
+
+                        credential: {
+                            id: credential.id,
+
+                            rawId: bytesToBase64url(
+                                credential.rawId
+                            ),
+
+                            type: credential.type,
+
+                            response: {
+                                clientDataJSON:
+                                    bytesToBase64url(
+                                        credential.response.clientDataJSON
+                                    ),
+
+                                authenticatorData:
+                                    bytesToBase64url(
+                                        credential.response.authenticatorData
+                                    ),
+
+                                signature:
+                                    bytesToBase64url(
+                                        credential.response.signature
+                                    ),
+
+                                userHandle:
+                                    credential.response.userHandle
+                                        ? bytesToBase64url(
+                                            credential.response.userHandle
+                                        )
+                                        : null
+                            }
+                        }
+                    }
+                );
+
+                showMessage(
+                    result.message ||
+                    "Authentication successful.",
+                    "success"
+                );
+
+                // Redirect only after server-side verification.
+                if (result.redirectUrl) {
+                    window.location.href = result.redirectUrl;
+                }
+
+            } catch (error) {
+                handleError(error);
+
+            } finally {
+                setLoading(false);
+            }
+        });
+
+
+        // Prevent accidental form submission/reload.
+        loginForm.addEventListener("submit", function (event) {
+            event.preventDefault();
+        });
     </script>
 
 </body>
+
 </html>
