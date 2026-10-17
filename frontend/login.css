@@ -207,16 +207,4 @@ button:disabled {
     font-size: 0.8rem;
   }
 }
-/* Make headings white on the dark background */
-.hero-title,
-.hero-title span,
-.section-title,
-.feature-card h3,
-.cta-section h2,
-.navbar-brand,
-.navbar-brand span {
-  color: #ffffff !important;
-}
-
-/* Keep the blue/cyan accents on buttons and icons */
 

@@ -8,6 +8,8 @@ Provides endpoints for:
 - Interactive tamper demonstration endpoint for security audits
 """
 
+
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -22,7 +24,16 @@ from app.modules.ledger.models import (
 router = APIRouter(prefix="/ledger", tags=["Simulated Ledger"])
 
 # Shared singleton instance (can be overridden via dependency injection)
-ledger_instance = SimulatedLedger(auto_genesis=True)
+from pathlib import Path
+
+LEDGER_STORAGE_PATH = (
+    Path(__file__).resolve().parents[3] / "data" / "ledger.json"
+)
+
+ledger_instance = SimulatedLedger(
+    auto_genesis=True,
+    storage_path=str(LEDGER_STORAGE_PATH),
+)
 
 
 def get_ledger() -> SimulatedLedger:
