@@ -560,3 +560,62 @@
 </body>
 
 </html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Passwordless Login | Trust Mesh</title>
+  <link rel="stylesheet" href="/login.css">
+  <script src="/webauthn.js" defer></script>
+</head>
+<body>
+  <header class="login-header">
+    <a class="brand" href="/">Trust<span>Mesh</span></a>
+    <a class="back-link" href="/">← Back to home</a>
+  </header>
+
+  <main class="login-page">
+    <section class="card">
+      <div class="mark" aria-hidden="true">⌁</div>
+
+      <p class="eyebrow">ZERO TRUST IDENTITY MESH</p>
+      <h1>Passwordless authentication</h1>
+
+      <p class="intro">
+        Register a passkey, then use your device authenticator or security key
+        to sign in.
+      </p>
+
+      <form id="authForm">
+        <label for="username">Account email or username</label>
+        <input
+          id="username"
+          name="username"
+          type="text"
+          autocomplete="username webauthn"
+          placeholder="Enter your username"
+          minlength="3"
+          required
+        >
+
+        <div class="actions">
+          <button id="registerBtn" type="button">Register passkey</button>
+          <button id="loginBtn" type="button" class="secondary">
+            Log in with passkey
+          </button>
+        </div>
+      </form>
+
+      <p id="status" class="status" role="status" aria-live="polite">
+        Enter a username to begin.
+      </p>
+
+      <p class="note">
+        Your authenticator creates and protects the private key. The server
+        should store the public credential.
+      </p>
+    </section>
+  </main>
+</body>
+</html>
