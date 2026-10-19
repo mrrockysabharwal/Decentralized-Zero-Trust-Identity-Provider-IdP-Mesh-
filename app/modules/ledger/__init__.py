@@ -18,7 +18,7 @@ from app.modules.ledger.hasher import (
     hash_did_document,
 )
 from app.modules.ledger.chain import SimulatedLedger
-from app.modules.ledger.router import router as ledger_router
+
 
 __all__ = [
     "LedgerRecord",
