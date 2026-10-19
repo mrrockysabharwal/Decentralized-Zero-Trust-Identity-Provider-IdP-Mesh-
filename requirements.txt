@@ -1,0 +1,21 @@
+# Core Backend & API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.9.0
+
+# Cryptography & Identity (Ed25519)
+cryptography>=43.0.0
+
+# Passwordless Authentication (WebAuthn/FIDO2)
+webauthn>=2.5.0
+
+# Access Tokens (JWT) & Zero-Trust
+pyjwt[crypto]>=2.9.0
+
+# Revocation & State Storage
+redis>=5.0.0
+
+# Testing & Utilities
+pytest>=8.0.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
