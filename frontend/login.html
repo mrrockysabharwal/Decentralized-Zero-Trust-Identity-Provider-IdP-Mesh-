@@ -358,7 +358,7 @@
                  * with Base64URL-encoded challenge and user.id.
                  */
                 const options = await sendRequest(
-                    "/api/webauthn/register/options",
+                    "/webauthn/register/options",
                     { username }
                 );
 
@@ -394,7 +394,7 @@
                 }
 
                 const result = await sendRequest(
-                    "/api/webauthn/register/verify",
+                    "/webauthn/register/verify",
                     {
                         username,
 
@@ -465,7 +465,7 @@
                  * with a Base64URL-encoded challenge.
                  */
                 const options = await sendRequest(
-                    "/api/webauthn/login/options",
+                    "/webauthn/login/options",
                     { username }
                 );
 
@@ -498,7 +498,7 @@
                 }
 
                 const result = await sendRequest(
-                    "/api/webauthn/login/verify",
+                    "/webauthn/login/verify",
                     {
                         username,
 
