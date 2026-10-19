@@ -63,6 +63,13 @@
         <div class="login-form-section">
 
             <div class="login-card">
+                <div class="login-card">
+
+    <a href="index.html" class="back-home">← Back to Home</a>
+
+    <div class="icon-box">
+        .
+    </div>
 
                 <div class="login-icon">
                     🔑
@@ -351,7 +358,7 @@
                  * with Base64URL-encoded challenge and user.id.
                  */
                 const options = await sendRequest(
-                    "/api/webauthn/register/options",
+                    "/webauthn/register/options",
                     { username }
                 );
 
@@ -387,7 +394,7 @@
                 }
 
                 const result = await sendRequest(
-                    "/api/webauthn/register/verify",
+                    "/webauthn/register/verify",
                     {
                         username,
 
@@ -458,7 +465,7 @@
                  * with a Base64URL-encoded challenge.
                  */
                 const options = await sendRequest(
-                    "/api/webauthn/login/options",
+                    "/webauthn/login/options",
                     { username }
                 );
 
@@ -491,7 +498,7 @@
                 }
 
                 const result = await sendRequest(
-                    "/api/webauthn/login/verify",
+                    "/webauthn/login/verify",
                     {
                         username,
 

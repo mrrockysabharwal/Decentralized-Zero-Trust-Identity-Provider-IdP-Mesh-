@@ -1,12 +1,13 @@
 
 """
-Minimal WebAuthn registration and passwordless login API.
+WebAuthn registration, passwordless login, and DID resolution API.
 
 For local development only. Production requires appropriate account
 verification, session/token issuance, rate limiting, and other security controls.
 """
 
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -16,10 +17,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import cbor2
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+from app.modules.ledger.router import router as ledger_router
+from app.modules.ledger.router import get_ledger
+from app.modules.ledger.models import LedgerOperation
+from app.modules.ledger.hasher import hash_did_document
 
 from webauthn import (
     generate_authentication_options,
@@ -41,7 +48,8 @@ from webauthn.helpers.structs import (
 # --------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-FRONTEND_DIR = BASE_DIR.parent / "frontend"
+PROJECT_DIR = BASE_DIR.parent
+FRONTEND_DIR = PROJECT_DIR / "frontend"
 
 DB_PATH = Path(
     os.getenv("WEBAUTHN_DB_PATH", str(BASE_DIR / "webauthn.sqlite3"))
@@ -55,16 +63,18 @@ CHALLENGE_TTL_SECONDS = 300
 
 app = FastAPI(
     title="Zero Trust Identity Mesh - WebAuthn API",
-    version="1.0.0",
+    version="1.1.0",
 )
+
+app.include_router(ledger_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+    allow_origins=list({
         ORIGIN,
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-    ],
+    }),
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
@@ -140,8 +150,25 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_challenges_lookup
             ON challenges(username, purpose);
+
+            CREATE TABLE IF NOT EXISTS did_documents (
+                did TEXT PRIMARY KEY,
+                document_json TEXT NOT NULL,
+                doc_hash TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             """
         )
+
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(users)"
+            ).fetchall()
+        }
+
+        if "did" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN did TEXT")
 
 
 @app.on_event("startup")
@@ -186,10 +213,244 @@ def get_user(username: str):
 def get_credentials(username: str):
     with db_connection() as conn:
         return conn.execute(
-            "SELECT * FROM credentials WHERE username = ?",
+            """
+            SELECT *
+            FROM credentials
+            WHERE username = ?
+            ORDER BY credential_id
+            """,
             (username,),
         ).fetchall()
 
+
+def normalize_username(username: str) -> str:
+    return username.strip().lower()
+
+
+# --------------------------------------------------
+# DID and public-key helpers
+# --------------------------------------------------
+
+def ensure_user_did(username: str) -> str:
+    """Create or reuse a stable, pseudonymous DID for a user."""
+
+    user = get_user(username)
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    suffix = hashlib.sha256(
+        user["user_handle"].encode("utf-8")
+    ).hexdigest()[:32]
+
+    did = f"did:mesh:{suffix}"
+
+    with db_connection() as conn:
+        conn.execute(
+            "UPDATE users SET did = ? WHERE username = ?",
+            (did, username),
+        )
+
+    return did
+
+
+def cose_public_key_to_jwk(public_key_bytes: bytes) -> dict:
+    """Convert a stored COSE public key into a public JWK."""
+
+    try:
+        cose = cbor2.loads(public_key_bytes)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not decode the stored passkey public key.",
+        ) from exc
+
+    kty = cose.get(1)
+    alg = cose.get(3)
+
+    algorithms = {
+        -7: "ES256",
+        -35: "ES384",
+        -36: "ES512",
+        -257: "RS256",
+        -258: "RS384",
+        -259: "RS512",
+        -37: "PS256",
+        -38: "PS384",
+        -39: "PS512",
+        -8: "EdDSA",
+    }
+
+    if kty == 2:  # EC2
+        curves = {1: "P-256", 2: "P-384", 3: "P-521"}
+        curve = cose.get(-1)
+
+        if curve not in curves:
+            raise HTTPException(
+                status_code=500,
+                detail="Unsupported elliptic curve in passkey.",
+            )
+
+        jwk = {
+            "kty": "EC",
+            "crv": curves[curve],
+            "x": b64url_encode(cose[-2]),
+            "y": b64url_encode(cose[-3]),
+        }
+
+    elif kty == 3:  # RSA
+        jwk = {
+            "kty": "RSA",
+            "n": b64url_encode(cose[-1]),
+            "e": b64url_encode(cose[-2]),
+        }
+
+    elif kty == 1:  # OKP
+        curves = {6: "Ed25519", 7: "Ed448"}
+        curve = cose.get(-1)
+
+        if curve not in curves:
+            raise HTTPException(
+                status_code=500,
+                detail="Unsupported OKP curve in passkey.",
+            )
+
+        jwk = {
+            "kty": "OKP",
+            "crv": curves[curve],
+            "x": b64url_encode(cose[-2]),
+        }
+
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Unsupported passkey public-key type.",
+        )
+
+    if alg in algorithms:
+        jwk["alg"] = algorithms[alg]
+
+    jwk["use"] = "sig"
+    return jwk
+
+
+def build_did_document(username: str, did: str) -> dict:
+    """Build a DID document containing the user's registered public keys."""
+
+    credentials = get_credentials(username)
+
+    methods = []
+    authentication = []
+
+    for credential in credentials:
+        credential_id = b64url_decode(
+            credential["credential_id"]
+        )
+
+        fingerprint = hashlib.sha256(
+            credential_id
+        ).hexdigest()[:32]
+
+        method_id = f"{did}#webauthn-{fingerprint}"
+
+        methods.append({
+            "id": method_id,
+            "type": "JsonWebKey2020",
+            "controller": did,
+            "publicKeyJwk": cose_public_key_to_jwk(
+                b64url_decode(credential["public_key"])
+            ),
+        })
+
+        authentication.append(method_id)
+
+    return {
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "id": did,
+        "verificationMethod": methods,
+        "authentication": authentication,
+    }
+
+
+def get_latest_ledger_hash(did: str):
+    """Read the latest document hash from the existing ledger."""
+
+    latest = get_ledger().get_latest_record(did)
+
+    if latest is None:
+        return None
+
+    if isinstance(latest, dict):
+        return latest.get("doc_hash")
+
+    return getattr(latest, "doc_hash", None)
+
+
+def sync_did_document(username: str, did: str) -> str:
+    """
+    Persist a complete DID document and anchor its hash.
+
+    Existing ledger entries are preserved. A new ledger entry is
+    appended only if the document hash differs from the latest hash.
+    """
+
+    document = build_did_document(username, did)
+    document_hash = hash_did_document(document)
+
+    document_json = json.dumps(document, sort_keys=True)
+
+    with db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO did_documents
+                (did, document_json, doc_hash, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(did) DO UPDATE SET
+                document_json = excluded.document_json,
+                doc_hash = excluded.doc_hash,
+                updated_at = excluded.updated_at
+            """,
+            (
+                did,
+                document_json,
+                document_hash,
+                int(time.time()),
+            ),
+        )
+
+    ledger = get_ledger()
+    latest = ledger.get_latest_record(did)
+
+    if latest is None:
+        ledger.append_record(
+            did=did,
+            doc_hash=document_hash,
+            operation=LedgerOperation.CREATE,
+            metadata={
+                "source": "webauthn-registration",
+                "schema": "did-v1",
+                "keyFormat": "JWK",
+            },
+        )
+
+    elif get_latest_ledger_hash(did) != document_hash:
+        ledger.append_record(
+            did=did,
+            doc_hash=document_hash,
+            operation=LedgerOperation.UPDATE,
+            metadata={
+                "source": "webauthn-did-resolution",
+                "schema": "did-v1",
+                "keyFormat": "JWK",
+            },
+        )
+
+    return document_hash
+
+
+# --------------------------------------------------
+# Challenge helpers
+# --------------------------------------------------
 
 def save_challenge(username: str, purpose: str, challenge: bytes):
     now = int(time.time())
@@ -203,7 +464,7 @@ def save_challenge(username: str, purpose: str, challenge: bytes):
         conn.execute(
             """
             INSERT INTO challenges
-            (username, purpose, challenge, expires_at)
+                (username, purpose, challenge, expires_at)
             VALUES (?, ?, ?, ?)
             """,
             (
@@ -241,15 +502,14 @@ def take_challenge(username: str, purpose: str) -> bytes:
             )
 
         conn.execute(
-            "DELETE FROM challenges WHERE username = ? AND purpose = ?",
+            """
+            DELETE FROM challenges
+            WHERE username = ? AND purpose = ?
+            """,
             (username, purpose),
         )
 
     return b64url_decode(row["challenge"])
-
-
-def normalize_username(username: str) -> str:
-    return username.strip().lower()
 
 
 # --------------------------------------------------
@@ -299,6 +559,56 @@ def health():
 
 
 # --------------------------------------------------
+# DID resolution
+# --------------------------------------------------
+
+@app.get("/did/{did}")
+def resolve_did(did: str):
+    """Resolve a stored DID document and compare it with the ledger."""
+
+    with db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT document_json, doc_hash, updated_at
+            FROM did_documents
+            WHERE did = ?
+            """,
+            (did,),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="DID document not found. Run the migration/sync first.",
+        )
+
+    try:
+        document = json.loads(row["document_json"])
+        calculated_hash = hash_did_document(document)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not read or hash the stored DID document.",
+        ) from exc
+
+    ledger_hash = get_latest_ledger_hash(did)
+
+    return {
+        "did": did,
+        "document": document,
+        "document_hash": calculated_hash,
+        "stored_hash": row["doc_hash"],
+        "ledger_hash": ledger_hash,
+        "document_storage_valid": calculated_hash == row["doc_hash"],
+        "ledger_verified": (
+            calculated_hash == ledger_hash
+            and ledger_hash is not None
+        ),
+        "updated_at": row["updated_at"],
+    }
+
+
+# --------------------------------------------------
 # Registration: create options
 # --------------------------------------------------
 
@@ -323,11 +633,11 @@ def registration_options(body: UserRequest):
                         int(time.time()),
                     ),
                 )
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as exc:
             raise HTTPException(
                 status_code=409,
                 detail="Could not create this account. Try again.",
-            )
+            ) from exc
 
         user = get_user(username)
 
@@ -357,7 +667,7 @@ def registration_options(body: UserRequest):
 
 
 # --------------------------------------------------
-# Registration: verify response
+# Registration: verify response and sync DID
 # --------------------------------------------------
 
 @app.post("/webauthn/register/verify")
@@ -380,25 +690,46 @@ def registration_verify(body: RegistrationVerifyRequest):
             expected_rp_id=RP_ID,
             require_user_verification=True,
         )
-    except Exception:
+    except Exception as exc:
         raise HTTPException(
             status_code=400,
             detail="Registration verification failed. Please try again.",
-        )
+        ) from exc
 
     credential_id = b64url_encode(verification.credential_id)
     public_key = b64url_encode(verification.credential_public_key)
 
-    transports = body.credential.get("response", {}).get("transports", [])
+    transports = body.credential.get("response", {}).get(
+        "transports", []
+    )
 
+    with db_connection() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM credentials WHERE credential_id = ?",
+            (credential_id,),
+        ).fetchone()
+
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="This passkey is already registered.",
+        )
+
+    # Associate the user with their stable DID.
+    did = ensure_user_did(username)
+
+    # Save the verified credential before building the DID document.
     with db_connection() as conn:
         try:
             conn.execute(
                 """
-                INSERT INTO credentials
-                (
-                    credential_id, username, public_key,
-                    sign_count, transports, created_at
+                INSERT INTO credentials (
+                    credential_id,
+                    username,
+                    public_key,
+                    sign_count,
+                    transports,
+                    created_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
@@ -411,15 +742,19 @@ def registration_verify(body: RegistrationVerifyRequest):
                     int(time.time()),
                 ),
             )
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as exc:
             raise HTTPException(
                 status_code=409,
                 detail="This passkey is already registered.",
-            )
+            ) from exc
+
+    document_hash = sync_did_document(username, did)
 
     return {
         "verified": True,
-        "message": "Passkey registered successfully. You can now log in.",
+        "did": did,
+        "document_hash": document_hash,
+        "message": "Passkey registered and DID document anchored successfully.",
     }
 
 
@@ -503,11 +838,11 @@ def authentication_verify(body: AuthenticationVerifyRequest):
             credential_current_sign_count=stored["sign_count"],
             require_user_verification=True,
         )
-    except Exception:
+    except Exception as exc:
         raise HTTPException(
             status_code=401,
             detail="Authentication failed. Please try again.",
-        )
+        ) from exc
 
     with db_connection() as conn:
         conn.execute(
