@@ -99,8 +99,8 @@ def mesh_app():
 class TestMeshCrossModuleIntegration:
     """Verify contracts between Ledger and Token/Policy subsystems."""
 
-    def test_complete_zero_trust_lifecycle(self, mesh_app):
-        """Lifecycle: DID Anchor -> ZT Policy Token Issuance -> Token Verify -> Token Revoke -> Verify Rejection."""
+    def test_ledger_registration_does_not_authorize_token_operations(self, mesh_app):
+        """Anchoring a DID does not authenticate issuance or revocation callers."""
         client, ledger, revocation, public_key = mesh_app
         test_did = "did:mesh:key:z6MkuIntegrationUser01"
         doc_hash = hash_did_document({"id": test_did, "publicKey": "sample_ed25519_key"})
@@ -125,7 +125,7 @@ class TestMeshCrossModuleIntegration:
         assert verify_ledger_resp.status_code == 200
         assert verify_ledger_resp.json()["valid"] is True
 
-        # 2. Issue Token with Zero-Trust evaluation (Member 5)
+        # DID registration is not proof that this request controls the DID.
         issue_resp = client.post(
             "/api/v1/tokens/issue",
             json={
@@ -133,45 +133,19 @@ class TestMeshCrossModuleIntegration:
                 "scope": ["read:profile", "write:did"],
             },
         )
-        assert issue_resp.status_code == 201
-        token_info = issue_resp.json()
-        access_token = token_info["access_token"]
-        jti = token_info["jti"]
-        assert token_info["did"] == test_did
-        assert "read:profile" in token_info["scope"]
+        assert issue_resp.status_code == 503
 
-        # 3. Verify Token
-        verify_token_resp = client.post(
-            "/api/v1/tokens/verify",
-            json={"token": access_token},
-        )
-        assert verify_token_resp.status_code == 200
-        verify_data = verify_token_resp.json()
-        assert verify_data["valid"] is True
-        assert verify_data["claims"]["sub"] == test_did
-        assert verify_data["claims"]["jti"] == jti
-
-        # 4. Revoke Token by JTI
+        # A bare JTI is not proof of ownership and must not revoke anything.
+        jti = "another-identities-jti"
         revoke_resp = client.post(
             "/api/v1/tokens/revoke",
             json={"jti": jti, "reason": "Administrative revocation test"},
         )
-        assert revoke_resp.status_code == 200
-        assert revoke_resp.json()["revoked"] is True
-        assert revoke_resp.json()["jti"] == jti
+        assert revoke_resp.status_code == 503
+        assert revocation.is_revoked(jti) is False
 
-        # 5. Verify Token again - must be rejected due to revocation
-        verify_after_revoke = client.post(
-            "/api/v1/tokens/verify",
-            json={"token": access_token},
-        )
-        assert verify_after_revoke.status_code == 200
-        after_data = verify_after_revoke.json()
-        assert after_data["valid"] is False
-        assert "revoked" in after_data["error"].lower()
-
-    def test_zero_trust_halts_on_ledger_tampering(self, mesh_app):
-        """Zero-Trust principle: If ledger integrity fails, token issuance is immediately blocked."""
+    def test_issue_endpoint_fails_closed_when_ledger_is_tampered(self, mesh_app):
+        """Issuance stays unavailable regardless of ledger integrity state."""
         client, ledger, _, _ = mesh_app
         active_did = "did:mesh:key:z6MkuLegitUser99"
         doc_hash = hash_did_document({"id": active_did})
@@ -183,12 +157,12 @@ class TestMeshCrossModuleIntegration:
         )
         assert anchor_resp.status_code == 201
 
-        # Confirm token can be issued when ledger is intact
+        # Even an intact ledger cannot authenticate the caller.
         valid_issue = client.post(
             "/api/v1/tokens/issue",
             json={"did": active_did, "scope": ["read:profile"]},
         )
-        assert valid_issue.status_code == 201
+        assert valid_issue.status_code == 503
 
         # Simulate tampering on record #1's doc_hash (preserving the did so DID exists, but hash linkage is broken)
         tamper_resp = client.post(
@@ -203,16 +177,16 @@ class TestMeshCrossModuleIntegration:
         assert tamper_resp.status_code == 200
         assert tamper_resp.json()["valid"] is False
 
-        # Attempt to issue a token now — must be rejected with 403 Forbidden due to ledger integrity failure
+        # Issuance remains disabled; policy integrity checks are covered by
+        # the policy-engine tests.
         tampered_issue = client.post(
             "/api/v1/tokens/issue",
             json={"did": active_did, "scope": ["read:profile"]},
         )
-        assert tampered_issue.status_code == 403
-        assert "integrity" in tampered_issue.json()["detail"].lower()
+        assert tampered_issue.status_code == 503
 
-    def test_zero_trust_denies_deactivated_identity(self, mesh_app):
-        """Zero-Trust principle: Deactivated DIDs are immediately denied token issuance."""
+    def test_issue_endpoint_fails_closed_for_deactivated_did(self, mesh_app):
+        """A deactivated DID also cannot be used in unauthenticated issuance."""
         client, ledger, _, _ = mesh_app
         did = "did:mesh:key:z6MkuToDeactivate"
         doc_hash = hash_did_document({"id": did})
@@ -236,8 +210,7 @@ class TestMeshCrossModuleIntegration:
             "/api/v1/tokens/issue",
             json={"did": did, "scope": ["read:profile"]},
         )
-        assert issue_resp.status_code == 403
-        assert "deactivated" in issue_resp.json()["detail"].lower()
+        assert issue_resp.status_code == 503
 
     def test_dashboard_public_endpoints(self, mesh_app):
         """Verify endpoints consumed by dashboard: public-key and policy scopes."""

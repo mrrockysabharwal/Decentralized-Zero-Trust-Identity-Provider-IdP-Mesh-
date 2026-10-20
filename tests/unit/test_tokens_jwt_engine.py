@@ -105,18 +105,36 @@ def test_token_contains_expected_claims(valid_token, keypair, sample_did):
 
 
 def test_issue_token_with_extra_claims(keypair, sample_did):
-    """Extra claims must be embedded, but reserved fields must not be overwritten."""
+    """Custom claims survive, but callers cannot replace issuance or policy claims."""
     private_pem, public_pem = keypair
     token_str, _ = issue_token(
         did=sample_did,
         scope=["read:profile"],
         private_key_pem=private_pem,
-        extra_claims={"custom_field": "hello", "sub": "attacker_overwrite"},
+        extra_claims={
+            "custom_field": "hello",
+            "sub": "attacker_overwrite",
+            "jti": "attacker-jti",
+            "iat": 1,
+            "exp": 2,
+            "iss": "attacker-issuer",
+            "aud": "attacker-audience",
+            "scope": ["root:admin:unrestricted"],
+            "did_status": "ACTIVE_UNVERIFIED",
+            "did_verified_at": "attacker-timestamp",
+        },
     )
     claims = verify_token(token_str, public_pem)
     assert claims["custom_field"] == "hello"
-    # Reserved 'sub' must not be overwritten by extra_claims
     assert claims["sub"] == sample_did
+    assert claims["jti"] != "attacker-jti"
+    assert claims["iat"] > 1
+    assert claims["exp"] > claims["iat"]
+    assert claims["iss"] == TOKEN_ISSUER
+    assert claims["aud"] == TOKEN_AUDIENCE
+    assert claims["scope"] == ["read:profile"]
+    assert claims["did_status"] == "ACTIVE"
+    assert claims["did_verified_at"] != "attacker-timestamp"
 
 
 # ---------------------------------------------------------------------------

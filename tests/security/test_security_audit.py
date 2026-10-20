@@ -180,8 +180,10 @@ class TestSecurityInvariants:
         assert data["valid"] is False
         assert "expired" in data["error"].lower()
 
-    def test_policy_scope_injection_prevention(self, security_test_env):
-        """Requesting unpermitted or escalation scopes must be rejected by policy engine."""
+    def test_unauthenticated_issue_fails_closed_with_scope_escalation_payload(
+        self, security_test_env
+    ):
+        """Unauthenticated issuance attempts fail closed, including scope escalation."""
         client = security_test_env["client"]
         active_did = "did:mesh:key:z6MkuScopeTest"
         doc_hash = hash_did_document({"id": active_did})
@@ -198,5 +200,38 @@ class TestSecurityInvariants:
             "/api/v1/tokens/issue",
             json={"did": active_did, "scope": ["read:profile", "root:admin:unrestricted"]},
         )
-        assert resp.status_code == 403
-        assert "not permitted" in resp.json()["detail"].lower()
+        assert resp.status_code == 503
+        assert "authenticated did" in resp.json()["detail"].lower()
+
+    def test_unauthenticated_caller_cannot_issue_or_revoke_another_dids_token(
+        self, security_test_env
+    ):
+        """Cross-identity issue and revoke requests cannot mutate token state."""
+        client = security_test_env["client"]
+        other_did = "did:mesh:key:z6MkuOtherIdentitySecurityTest"
+        doc_hash = hash_did_document({"id": other_did})
+        anchor_resp = client.post(
+            "/api/v1/ledger/anchor",
+            json={"did": other_did, "doc_hash": doc_hash, "operation": "CREATE"},
+        )
+        assert anchor_resp.status_code == 201
+
+        issue_resp = client.post(
+            "/api/v1/tokens/issue",
+            json={"did": other_did, "scope": ["read:profile"]},
+        )
+        assert issue_resp.status_code == 503
+
+        # Mint a test token locally to provide a real JTI belonging to the
+        # other DID; the unauthenticated HTTP request still cannot revoke it.
+        _token, other_jti = issue_token(
+            did=other_did,
+            scope=["read:profile"],
+            private_key_pem=security_test_env["private_pem"],
+        )
+        revoke_resp = client.post(
+            "/api/v1/tokens/revoke",
+            json={"jti": other_jti, "reason": "cross-identity attempt"},
+        )
+        assert revoke_resp.status_code == 503
+        assert security_test_env["revocation"].is_revoked(other_jti) is False

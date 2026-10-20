@@ -5,9 +5,9 @@ All singleton dependencies (keys, ledger, policy engine, revocation store)
 are replaced with fresh test instances via module-level monkeypatching.
 
 Tests cover:
-  POST /tokens/issue          — happy path, unregistered DID → 403
+  POST /tokens/issue          - Fails closed with HTTP 503 pending verified caller authentication
   POST /tokens/verify         — valid token, expired token, revoked token
-  POST /tokens/revoke         — successful revocation
+  POST /tokens/revoke         - Fails closed with HTTP 503 pending token ownership authorization
   GET  /tokens/public-key     — returns PEM and algorithm
   GET  /tokens/policy/scopes  — returns allowed scopes list
 """
@@ -77,53 +77,60 @@ def app_client():
 # ---------------------------------------------------------------------------
 
 
-def test_issue_endpoint_happy_path(app_client):
-    """Issuing a token for a registered, active DID must return 201 with a token."""
+def test_issue_endpoint_fails_closed_without_authenticated_principal(app_client):
+    """Ledger registration alone must not authorize token issuance."""
     client, active_did, *_ = app_client
     response = client.post(
         "/api/v1/tokens/issue",
         json={"did": active_did, "scope": ["read:profile"]},
     )
-    assert response.status_code == 201
-    data = response.json()
-    assert "access_token" in data
-    assert data["token_type"] == "Bearer"
-    assert data["did"] == active_did
-    assert "read:profile" in data["scope"]
-    assert "jti" in data
-    assert data["expires_in"] > 0
+    assert response.status_code == 503
+    assert "authenticated did" in response.json()["detail"].lower()
 
 
-def test_issue_endpoint_returns_valid_jwt_structure(app_client):
-    """The issued access_token must be a valid three-part JWT string."""
-    client, active_did, *_ = app_client
+def test_issue_endpoint_cannot_act_for_another_identity(app_client):
+    """An unauthenticated caller cannot request a token for an arbitrary DID."""
+    client, *_ = app_client
     response = client.post(
         "/api/v1/tokens/issue",
-        json={"did": active_did, "scope": ["read:profile"]},
+        json={"did": "did:mesh:key:z6MkuAnotherIdentity", "scope": ["read:profile"]},
     )
-    token = response.json()["access_token"]
-    parts = token.split(".")
-    assert len(parts) == 3, "JWT must have exactly 3 dot-separated parts"
+    assert response.status_code == 503
 
 
-def test_issue_endpoint_unregistered_did_returns_403(app_client):
-    """Issuing for an unknown DID must return 403 Forbidden."""
+def test_issue_endpoint_unregistered_did_fails_closed_without_auth(app_client):
+    """Unknown DID requests are unavailable before identity authorization."""
     client, *_ = app_client
     response = client.post(
         "/api/v1/tokens/issue",
         json={"did": "did:mesh:key:z6MkuNONEXISTENT", "scope": ["read:profile"]},
     )
-    assert response.status_code == 403
+    assert response.status_code == 503
 
 
-def test_issue_endpoint_invalid_scope_returns_403(app_client):
-    """Issuing with an invalid scope must return 403 Forbidden."""
+def test_issue_endpoint_invalid_scope_fails_closed_without_auth(app_client):
+    """Scope validation cannot replace authenticated caller authorization."""
     client, active_did, *_ = app_client
     response = client.post(
         "/api/v1/tokens/issue",
         json={"did": active_did, "scope": ["hack:everything"]},
     )
-    assert response.status_code == 403
+    assert response.status_code == 503
+
+
+def test_issue_endpoint_extra_claims_request_fails_closed_without_auth(app_client):
+    """Scope escalation payloads cannot bypass missing caller authentication."""
+    client, active_did, *_ = app_client
+    response = client.post(
+        "/api/v1/tokens/issue",
+        json={
+            "did": active_did,
+            "scope": ["read:profile"],
+            "extra_claims": {"scope": ["root:admin:unrestricted"]},
+        },
+    )
+
+    assert response.status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -133,14 +140,15 @@ def test_issue_endpoint_invalid_scope_returns_403(app_client):
 
 def test_verify_endpoint_valid_token(app_client):
     """Verifying a freshly issued, non-revoked token must return valid=True."""
-    client, active_did, *_ = app_client
+    client, active_did, private_pem, *_ = app_client
 
-    # Issue first
-    issue_resp = client.post(
-        "/api/v1/tokens/issue",
-        json={"did": active_did, "scope": ["read:profile"]},
+    # Exercise verification independently of the intentionally unavailable
+    # HTTP issuance endpoint.
+    token, _ = issue_token(
+        did=active_did,
+        scope=["read:profile"],
+        private_key_pem=private_pem,
     )
-    token = issue_resp.json()["access_token"]
 
     # Verify
     response = client.post("/api/v1/tokens/verify", json={"token": token})
@@ -184,19 +192,22 @@ def test_verify_endpoint_revoked_token_returns_invalid(app_client):
 # ---------------------------------------------------------------------------
 
 
-def test_revoke_endpoint_returns_200_and_confirmation(app_client):
-    """Revoking a JTI must return 200 with revoked=True and the JTI echoed back."""
-    client, *_ = app_client
-    jti = "router-test-jti-to-revoke"
+def test_revoke_endpoint_rejects_arbitrary_jti_without_auth(app_client):
+    """An unauthenticated caller cannot revoke a JTI belonging to another DID."""
+    client, _active_did, private_pem, _public_pem, revocation_store = app_client
+    another_did = "did:mesh:key:z6MkuAnotherIdentity"
+    _token, jti = issue_token(
+        did=another_did,
+        scope=["read:profile"],
+        private_key_pem=private_pem,
+    )
     response = client.post(
         "/api/v1/tokens/revoke",
-        json={"jti": jti, "reason": "test revocation"},
+        json={"jti": jti, "reason": "unauthorized cross-identity revocation"},
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["revoked"] is True
-    assert data["jti"] == jti
-    assert jti in data["message"]
+    assert response.status_code == 503
+    assert "authenticated token ownership" in response.json()["detail"].lower()
+    assert revocation_store.is_revoked(jti) is False
 
 
 # ---------------------------------------------------------------------------

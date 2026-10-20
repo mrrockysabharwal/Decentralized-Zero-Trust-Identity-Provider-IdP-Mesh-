@@ -2,20 +2,29 @@
 
 **Author / Owner**: Member 5
 **Branch**: `member5`
-**Status**: Fully Implemented & Tested
+**Status**: JWT and policy components implemented; HTTP issuance and revocation unavailable pending authentication integration
 
 ---
 
 ## 1. Overview & Purpose
 
-The **JWT Access Token & Zero-Trust Policy Engine** is the authorization layer of the Decentralized Zero-Trust IdP Mesh. After a user's identity has been proven via WebAuthn (Member 2) and anchored to a DID on the Ledger (Member 4), this module:
+The **JWT Access Token & Zero-Trust Policy Engine** provides JWT and policy components for the Decentralized Zero-Trust IdP Mesh. A verified WebAuthn identity is not currently integrated with these HTTP endpoints. The internal components:
 
-1. **Issues short-lived, signed JWT access tokens** containing DID-bound claims.
-2. **Enforces Zero-Trust policies** — every token request is validated against the live ledger state before a token is issued.
-3. **Manages token revocation** via a Redis-backed JTI deny-list (with automatic in-memory fallback).
-4. **Exposes FastAPI endpoints** for Member 1 (Core Backend) and Member 6 (Admin Dashboard) to integrate with.
+1. **Provides JWT signing components** for DID-bound claims; HTTP issuance is unavailable pending verified caller authentication.
+2. **Provides Zero-Trust policy checks** for DID registration, status, ledger integrity, and allowed scopes; these checks do not authenticate callers.
+3. **Provides JTI deny-list storage** via Redis or an in-memory fallback; the HTTP revocation operation remains disabled pending ownership checks.
+4. **Exposes FastAPI routes** for integration; HTTP issuance and revocation remain disabled pending authentication and ownership authorization.
 
-> **Zero-Trust principle**: Never implicit trust. Every token issuance validates the DID's current ledger state in real time. If the ledger is tampered with, token issuance halts entirely.
+> **Zero-Trust principle**: Never implicit trust. The policy engine checks current ledger state for a DID and requested scopes; this does not establish who controls the DID.
+
+**Authorization status:** The repository does not currently integrate a
+verified WebAuthn identity or authenticated session. Ledger registration alone
+does not authenticate the caller. Accordingly, the HTTP issue and revoke
+endpoints fail closed with `503 Service Unavailable` until verified DID
+ownership and token ownership checks are integrated. See
+[`token-authorization-gap.md`](token-authorization-gap.md) for the gap and next
+step. The policy engine and JWT engine remain available as internal components;
+their existence does not secure these HTTP endpoints.
 
 ---
 
@@ -72,7 +81,9 @@ All endpoints are mounted at `/api/v1/tokens`.
 
 ### `POST /tokens/issue`
 
-Issue a JWT access token for an authenticated DID.
+Currently unavailable: this endpoint returns `503 Service Unavailable` until
+the caller's DID is verified by the authentication module. A DID in the request
+body or a matching ledger record is not caller authentication.
 
 **Request**:
 ```json
@@ -82,7 +93,7 @@ Issue a JWT access token for an authenticated DID.
 }
 ```
 
-**Response** (201 Created):
+**Future response after authentication integration (201 Created; currently unavailable):**
 ```json
 {
   "access_token": "<JWT string>",
@@ -94,7 +105,7 @@ Issue a JWT access token for an authenticated DID.
 }
 ```
 
-**Error** (403 Forbidden — policy denied):
+**Future policy error after authentication integration** (403 Forbidden):
 ```json
 { "detail": "DID 'did:mesh:key:z6MkuExample' is not registered on the ledger..." }
 ```
@@ -120,11 +131,14 @@ Verify and decode a JWT.
 
 ### `POST /tokens/revoke`
 
-Add a token's JTI to the deny-list.
+Currently unavailable: this endpoint returns `503 Service Unavailable` until
+the caller's authority over the requested token is verified. A caller-supplied
+JTI does not prove token ownership.
 
 **Request**: `{ "jti": "<UUID>", "reason": "User logged out" }`
 
-**Response** (200): `{ "revoked": true, "jti": "<UUID>", "message": "..." }`
+**Response** (503 Service Unavailable): token revocation is disabled pending
+authenticated token ownership checks.
 
 ---
 
@@ -158,17 +172,10 @@ app.include_router(tokens_router, prefix="/api/v1")
 
 ### For Member 3 (DID & Cryptography)
 
-After registering a DID and anchoring it to the ledger, call the issue endpoint:
-
-```python
-import httpx
-
-response = httpx.post("http://localhost:8000/api/v1/tokens/issue", json={
-    "did": "did:mesh:key:z6MkuExample",
-    "scope": ["read:profile"]
-})
-token = response.json()["access_token"]
-```
+Token issuance through the HTTP endpoint is currently unavailable and returns
+`503 Service Unavailable`. A caller must not treat DID registration as proof of
+identity. Integrate a verified principal before documenting or using a live
+issuance example.
 
 ### For Member 6 (Admin Dashboard)
 
@@ -214,13 +221,7 @@ public key as part of the same operation.
 pytest tests/unit/test_tokens_jwt_engine.py tests/unit/test_tokens_policy.py tests/unit/test_tokens_revocation.py tests/unit/test_tokens_router.py -v
 ```
 
-Expected output:
-```
-tests/unit/test_tokens_jwt_engine.py .......    [ 23%]
-tests/unit/test_tokens_policy.py ...........    [ 59%]
-tests/unit/test_tokens_revocation.py .......    [ 82%]
-tests/unit/test_tokens_router.py .........      [100%]
-====================== 34 passed ======================
-```
+Pytest prints the collected test results and final summary. The test count can
+change as the suite evolves; use the summary from the run you perform.
 
 > **Note**: Tests do **not** require a running Redis server. The revocation store falls back to an in-memory backend automatically.

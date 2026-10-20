@@ -35,6 +35,19 @@ from app.modules.tokens.models import (
 _PRIVATE_KEY_FILENAME = "token_signing_private.pem"
 _PUBLIC_KEY_FILENAME = "token_signing_public.pem"
 
+# Claims controlled by token issuance or policy must never be caller-overridable.
+_RESERVED_CLAIMS = {
+    "sub",
+    "jti",
+    "iat",
+    "exp",
+    "iss",
+    "aud",
+    "scope",
+    "did_status",
+    "did_verified_at",
+}
+
 
 # ---------------------------------------------------------------------------
 # Key Generation & Loading
@@ -172,9 +185,8 @@ def issue_token(
     }
 
     if extra_claims:
-        # Extra claims must not overwrite reserved fields
-        reserved = {"sub", "jti", "iat", "exp", "iss", "aud"}
-        safe_extras = {k: v for k, v in extra_claims.items() if k not in reserved}
+        # Keep custom claims while preserving all issuance- and policy-owned claims.
+        safe_extras = {k: v for k, v in extra_claims.items() if k not in _RESERVED_CLAIMS}
         payload.update(safe_extras)
 
     private_key_obj = _load_private_key(private_key_pem)

@@ -33,7 +33,7 @@ TOKEN_AUDIENCE: str = "idp-mesh-api"
 
 
 class TokenIssueRequest(BaseModel):
-    """Payload to request a new JWT access token for an authenticated DID."""
+    """Request a token for a DID subject; this payload does not authenticate the caller."""
 
     did: str = Field(
         min_length=3,
