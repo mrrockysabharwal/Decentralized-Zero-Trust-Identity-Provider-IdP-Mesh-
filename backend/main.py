@@ -28,6 +28,7 @@ from app.modules.ledger.router import get_ledger
 from app.modules.ledger.models import LedgerOperation
 from app.modules.ledger.hasher import hash_did_document
 
+
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -862,3 +863,7 @@ def authentication_verify(body: AuthenticationVerifyRequest):
         "username": username,
         "message": "Passwordless login successful.",
     }
+
+#/backend/router.py
+from oidc.router import router as oidc_router
+app.include_router(oidc_router)
