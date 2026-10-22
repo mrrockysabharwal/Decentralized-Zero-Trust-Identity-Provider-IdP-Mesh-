@@ -58,8 +58,11 @@ import app.modules.tokens.router as _tokens_router_module
 from app.modules.webauthn import webauthn_router
 import app.modules.webauthn.router as _webauthn_router_module
 
+# ── Module A (Member 3) — DID Registry & Cryptography ───────────────────────
+from app.modules.did import did_router
+import app.modules.did.router as _did_router_module
+
 # ── Future module routers — uncomment once branches are merged ────────────────
-# from app.modules.did      import did_router        # Member 3 — DID Registry
 # from app.modules.admin    import admin_router      # Member 6 — Admin Dashboard
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -83,12 +86,12 @@ ALLOWED_ORIGINS: list[str] = os.getenv(
 # To satisfy Zero-Trust: a DID anchored via /ledger/anchor must be found when
 # /tokens/issue runs its policy check.  We point both routers at the SAME object.
 def _wire_shared_ledger() -> None:
-    """Replace the tokens router's internal ledger with Member 4's shared ledger.
+    """Replace each module router's internal ledger with Member 4's shared ledger.
 
     This ensures that any DID anchored through Module C (Ledger) endpoints is
     immediately visible to Module E's ZeroTrustPolicyEngine when issuing tokens.
-    Also wires Module B (WebAuthn) so registrations are anchored on the same
-    shared ledger chain.
+    Also wires Module A (DID Registry), Module B (WebAuthn) so all registrations
+    and deactivations are anchored on the same shared ledger chain.
     """
     # Wire Module E
     _tokens_router_module._shared_ledger = ledger_instance
@@ -111,6 +114,12 @@ def _wire_shared_ledger() -> None:
         "Shared SimulatedLedger wired: Module C ledger_instance → Module B WebAuthn service"
     )
 
+    # Wire Module A — DID Registry uses the same shared ledger for anchoring
+    _did_router_module._shared_ledger = ledger_instance
+    logger.info(
+        "Shared SimulatedLedger wired: Module C ledger_instance → Module A DID Registry"
+    )
+
 
 # ── Application lifespan (startup / shutdown hooks) ───────────────────────────
 @asynccontextmanager
@@ -125,12 +134,12 @@ async def lifespan(app: FastAPI):
     logger.info("  Swagger UI  : http://localhost:8000/docs")
     logger.info("  ReDoc       : http://localhost:8000/redoc")
     logger.info("  Active modules:")
-    logger.info("    [M2] WebAuthn      → /api/v1/webauthn")
-    logger.info("    [M4] Ledger        → /api/v1/ledger")
-    logger.info("    [M5] Tokens        → /api/v1/tokens")
+    logger.info("    [MA] DID Registry  → /api/v1/did")
+    logger.info("    [MB] WebAuthn      → /api/v1/webauthn")
+    logger.info("    [MC] Ledger        → /api/v1/ledger")
+    logger.info("    [ME] Tokens        → /api/v1/tokens")
     logger.info("  Pending modules:")
-    logger.info("    [M3] DID Registry  → /api/v1/did       (not yet merged)")
-    logger.info("    [M6] Admin Dashboard → /api/v1/admin   (not yet merged)")
+    logger.info("    [MD] Admin Dashboard → /api/v1/admin   (not yet merged)")
     logger.info("=" * 65)
 
     yield  # ── Application is live ───────────────────────────────────────────
@@ -152,18 +161,18 @@ app = FastAPI(
         "| Module | Owner | Branch | Status | API Prefix |\n"
         "|--------|-------|--------|--------|------------|\n"
         "| Core Backend (`main.py`) | Member 1 | `main` | ✅ Active | — |\n"
+        "| **DID Registry & Cryptography** | Member 3 | `feature/identity-module` | ✅ Active | `/api/v1/did` |\n"
         "| WebAuthn / FIDO2 | Member 2 | `feature/webauthn-module` | ✅ Active | `/api/v1/webauthn` |\n"
-        "| DID Registry & Cryptography | Member 3 | TBD | 🔜 Pending | `/api/v1/did` |\n"
         "| Simulated Blockchain Ledger | Member 4 | `midhun` | ✅ Active | `/api/v1/ledger` |\n"
         "| JWT & Zero-Trust Policy Engine | Member 5 | `member5` | ✅ Active | `/api/v1/tokens` |\n"
         "| Admin Dashboard API | Member 6 | TBD | 🔜 Pending | `/api/v1/admin` |\n\n"
         "---\n\n"
         "## Key Integration Detail\n\n"
-        "Module B (WebAuthn), Module C (Ledger), and Module E (Tokens) share a **single `SimulatedLedger` "
-        "instance**, wired at startup by Member 1. WebAuthn registrations are automatically anchored "
-        "on the ledger, and the Token policy engine reads the same chain."
+        "Modules A (DID Registry), B (WebAuthn), C (Ledger), and E (Tokens) share a **single `SimulatedLedger` "
+        "instance**, wired at startup by Member 1. DID registrations and WebAuthn credentials are automatically "
+        "anchored on the ledger, and the Token policy engine reads the same chain."
     ),
-    version="1.1.0",
+    version="1.2.0",
     contact={"name": "IdP Mesh Team"},
     license_info={"name": "MIT"},
     lifespan=lifespan,
@@ -182,6 +191,17 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────────────────────────
 # Mount Module Routers
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Module A — Member 3 (DID Registry & Cryptography) ───────────────────────
+# Endpoints:
+#   POST /api/v1/did/create              — Generate key pair + register DID + ledger anchor
+#   GET  /api/v1/did/resolve/{did}       — Resolve DID → W3C DID Document
+#   GET  /api/v1/did/exists/{did}        — Check DID registration status
+#   GET  /api/v1/did/list                — List all registered DIDs
+#   POST /api/v1/did/update/{did}        — Update DID public key + anchor UPDATE
+#   POST /api/v1/did/deactivate/{did}    — Deactivate DID + anchor DEACTIVATE
+#   POST /api/v1/did/verify-signature    — Verify Ed25519 signature with DID's public key
+app.include_router(did_router, prefix="/api/v1")
 
 # ── Module B — Member 2 (WebAuthn / FIDO2 Passwordless Auth) ─────────────────
 # Endpoints:
@@ -212,8 +232,7 @@ app.include_router(ledger_router, prefix="/api/v1")
 app.include_router(tokens_router, prefix="/api/v1")
 
 # ── Future module routers (uncomment when branches are merged into main) ──────
-# app.include_router(did_router,       prefix="/api/v1")   # Member 3
-# app.include_router(admin_router,     prefix="/api/v1")   # Member 6
+# app.include_router(admin_router,     prefix="/api/v1")   # Member 6 — Admin Dashboard
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +255,20 @@ async def root() -> Dict[str, Any]:
         "redoc": "/redoc",
         "api_prefix": "/api/v1",
         "active_modules": {
+            "did": {
+                "owner": "Member 3",
+                "branch": "feature/identity-module",
+                "prefix": "/api/v1/did",
+                "endpoints": [
+                    "POST /api/v1/did/create",
+                    "GET  /api/v1/did/resolve/{did}",
+                    "GET  /api/v1/did/exists/{did}",
+                    "GET  /api/v1/did/list",
+                    "POST /api/v1/did/update/{did}",
+                    "POST /api/v1/did/deactivate/{did}",
+                    "POST /api/v1/did/verify-signature",
+                ],
+            },
             "webauthn": {
                 "owner": "Member 2",
                 "branch": "feature/webauthn-module",
@@ -275,7 +308,6 @@ async def root() -> Dict[str, Any]:
             },
         },
         "pending_modules": {
-            "did":      {"owner": "Member 3", "prefix": "/api/v1/did"},
             "admin":    {"owner": "Member 6", "prefix": "/api/v1/admin"},
         },
     }
