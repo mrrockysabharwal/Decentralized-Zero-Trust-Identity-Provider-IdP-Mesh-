@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, Query, Header
-from fastapi.responses import RedirectResponse
 from typing import Optional
 
 router = APIRouter(prefix="/oidc", tags=["OIDC"])

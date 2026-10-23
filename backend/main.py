@@ -865,5 +865,6 @@ def authentication_verify(body: AuthenticationVerifyRequest):
     }
 
 #/backend/router.py
-from oidc.router import router as oidc_router
+from backend.oidc.router import router as oidc_router
+
 app.include_router(oidc_router)
