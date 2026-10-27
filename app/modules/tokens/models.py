@@ -4,8 +4,9 @@ All models follow strict validation to prevent malformed data from entering the
 token issuance or verification pipeline.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
+from fastapi import HTTPException, Header, status
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +51,15 @@ class TokenIssueRequest(BaseModel):
     extra_claims: Dict[str, Any] = Field(
         default_factory=dict,
         description="Optional additional claims to embed in the token payload",
+    )
+    require_webauthn: bool = Field(
+        default=False,
+        description=(
+            "If True, the Zero-Trust policy engine will enforce Check 5: "
+            "the DID must have at least one registered WebAuthn credential before "
+            "a token is issued. Set to True for production flows that follow the "
+            "full DID → WebAuthn → Token ceremony."
+        ),
     )
 
     @field_validator("scope")

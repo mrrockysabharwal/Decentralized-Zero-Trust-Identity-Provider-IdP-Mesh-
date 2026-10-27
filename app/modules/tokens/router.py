@@ -121,7 +121,11 @@ def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
     Returns **403 Forbidden** if any policy check fails.
     """
     engine = get_policy_engine()
-    policy_result = engine.evaluate(did=payload.did, requested_scope=payload.scope)
+    policy_result = engine.evaluate(
+        did=payload.did,
+        requested_scope=payload.scope,
+        require_webauthn=payload.require_webauthn,
+    )
 
     if not policy_result.allowed:
         raise HTTPException(

@@ -62,8 +62,9 @@ import app.modules.webauthn.router as _webauthn_router_module
 from app.modules.did import did_router
 import app.modules.did.router as _did_router_module
 
-# ── Future module routers — uncomment once branches are merged ────────────────
-# from app.modules.admin    import admin_router      # Member 6 — Admin Dashboard
+# ── Module D (Member 6) — Admin Dashboard API ────────────────────────────────
+from app.modules.admin import admin_router
+import app.modules.admin.router as _admin_router_module
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -93,13 +94,15 @@ def _wire_shared_ledger() -> None:
     Also wires Module A (DID Registry), Module B (WebAuthn) so all registrations
     and deactivations are anchored on the same shared ledger chain.
     """
-    # Wire Module E
+    # Wire Module E — pass credential_store so Check 5 (WebAuthn gate) is active
     _tokens_router_module._shared_ledger = ledger_instance
     _tokens_router_module._policy_engine = _tokens_router_module.ZeroTrustPolicyEngine(
-        ledger=ledger_instance
+        ledger=ledger_instance,
+        credential_store=_webauthn_router_module._credential_store,
     )
     logger.info(
-        "Shared SimulatedLedger wired: Module C ledger_instance → Module E policy engine"
+        "Shared SimulatedLedger wired: Module C ledger_instance → Module E policy engine "
+        "(+ WebAuthn credential store for Check 5)"
     )
 
     # Wire Module B — re-create WebAuthnService with the shared ledger
@@ -120,6 +123,14 @@ def _wire_shared_ledger() -> None:
         "Shared SimulatedLedger wired: Module C ledger_instance → Module A DID Registry"
     )
 
+    # Wire Module D — Admin Dashboard gets the shared ledger + credential + revocation stores
+    _admin_router_module._shared_ledger    = ledger_instance
+    _admin_router_module._credential_store = _webauthn_router_module._credential_store
+    _admin_router_module._revocation_store = _tokens_router_module._revocation_store
+    logger.info(
+        "Admin Dashboard wired: shared ledger + credential store + revocation store → Module D"
+    )
+
 
 # ── Application lifespan (startup / shutdown hooks) ───────────────────────────
 @asynccontextmanager
@@ -138,8 +149,7 @@ async def lifespan(app: FastAPI):
     logger.info("    [MB] WebAuthn      → /api/v1/webauthn")
     logger.info("    [MC] Ledger        → /api/v1/ledger")
     logger.info("    [ME] Tokens        → /api/v1/tokens")
-    logger.info("  Pending modules:")
-    logger.info("    [MD] Admin Dashboard → /api/v1/admin   (not yet merged)")
+    logger.info("    [MD] Admin Dashboard → /api/v1/admin")
     logger.info("=" * 65)
 
     yield  # ── Application is live ───────────────────────────────────────────
@@ -172,7 +182,7 @@ app = FastAPI(
         "instance**, wired at startup by Member 1. DID registrations and WebAuthn credentials are automatically "
         "anchored on the ledger, and the Token policy engine reads the same chain."
     ),
-    version="1.2.0",
+    version="1.3.0",
     contact={"name": "IdP Mesh Team"},
     license_info={"name": "MIT"},
     lifespan=lifespan,
@@ -231,8 +241,19 @@ app.include_router(ledger_router, prefix="/api/v1")
 #   GET  /api/v1/tokens/policy/scopes           — List all policy-allowed permission scopes
 app.include_router(tokens_router, prefix="/api/v1")
 
-# ── Future module routers (uncomment when branches are merged into main) ──────
-# app.include_router(admin_router,     prefix="/api/v1")   # Member 6 — Admin Dashboard
+# ── Module D — Member 6 (Admin Dashboard API) ───────────────────────────────
+# Endpoints:
+#   GET  /api/v1/admin/dashboard                 — Aggregate stats (home page)
+#   GET  /api/v1/admin/identities                — All DIDs with status + credential count
+#   GET  /api/v1/admin/identities/{did}          — Full DID detail (ledger + credentials)
+#   GET  /api/v1/admin/ledger                    — Full ledger block viewer
+#   GET  /api/v1/admin/ledger/verify             — Real-time cryptographic audit
+#   GET  /api/v1/admin/credentials               — All WebAuthn credentials
+#   POST /api/v1/admin/tokens/{jti}/revoke       — Admin force-revoke a token
+#   GET  /api/v1/admin/tokens/policy             — Active token policy info
+#   POST /api/v1/admin/ledger/simulate-tamper    — Live tamper-detection demo
+#   GET  /api/v1/admin/health                    — Aggregate subsystem health
+app.include_router(admin_router, prefix="/api/v1")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,8 +328,24 @@ async def root() -> Dict[str, Any]:
                 ],
             },
         },
-        "pending_modules": {
-            "admin":    {"owner": "Member 6", "prefix": "/api/v1/admin"},
+        "active_modules_additional": {
+            "admin": {
+                "owner": "Member 6",
+                "branch": "feature/admin-dashboard",
+                "prefix": "/api/v1/admin",
+                "endpoints": [
+                    "GET  /api/v1/admin/dashboard",
+                    "GET  /api/v1/admin/identities",
+                    "GET  /api/v1/admin/identities/{did}",
+                    "GET  /api/v1/admin/ledger",
+                    "GET  /api/v1/admin/ledger/verify",
+                    "GET  /api/v1/admin/credentials",
+                    "POST /api/v1/admin/tokens/{jti}/revoke",
+                    "GET  /api/v1/admin/tokens/policy",
+                    "POST /api/v1/admin/ledger/simulate-tamper",
+                    "GET  /api/v1/admin/health",
+                ],
+            },
         },
     }
 
