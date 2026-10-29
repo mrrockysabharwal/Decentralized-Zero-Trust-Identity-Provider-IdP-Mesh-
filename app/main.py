@@ -359,3 +359,4 @@ async def root() -> Dict[str, Any]:
 async def health_check() -> Dict[str, str]:
     """Lightweight liveness probe for load-balancers and Docker health checks."""
     return {"status": "ok"}
+# edited the error
