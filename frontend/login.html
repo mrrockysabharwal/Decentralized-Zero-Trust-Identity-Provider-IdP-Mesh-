@@ -544,7 +544,6 @@
                     "success"
                 );
 
-                // Redirect only after server-side verification.
                 if (result.redirectUrl) {
                     window.location.href = result.redirectUrl;
                 }
@@ -558,7 +557,6 @@
         });
 
 
-        // Prevent accidental form submission/reload.
         loginForm.addEventListener("submit", function (event) {
             event.preventDefault();
         });
@@ -567,4 +565,3 @@
 </body>
 
 </html>
-.
