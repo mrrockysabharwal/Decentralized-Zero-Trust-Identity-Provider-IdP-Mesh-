@@ -33,7 +33,7 @@ class SimulatedLedger:
         auto_genesis: bool = True,
         storage_path: Optional[str] = None,
     ):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._chain: List[LedgerRecord] = []
         self._storage_path = storage_path
 

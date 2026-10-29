@@ -1,4 +1,4 @@
-﻿# Member 6 — Dashboard API Contract
+# Member 6 — Dashboard API Contract
 **Date:** 2026-10-14
 **Author:** Member 6 (Dashboard, Testing and Deployment)
 **Status:** Proposed — requires team review and approval
@@ -164,6 +164,169 @@ Returns the updated integrity status immediately.
 **Response 200:** `IntegrityStatusResponse` (same as 3.2)
 
 **Owner:** Member 4 (implemented)
+
+---
+
+### 3.6 POST /api/v1/tokens/issue — Proposed future behavior
+
+**Current implementation:** This operation returns `503 Service Unavailable`
+without issuing a token. Verified-principal authentication is not integrated;
+a request-body DID or ledger record does not authenticate the caller.
+
+Current response:
+```json
+{"detail": "Token issuance is unavailable until authenticated DID verification is integrated."}
+```
+
+**Intended purpose:** Issue a signed JWT access token bound to the authenticated
+principal's Decentralized Identifier after evaluating Zero-Trust policies.
+
+**Intended policy checks after verified-principal authorization:**
+1. DID is registered on the ledger chain.
+2. DID latest state is not `DEACTIVATE`.
+3. Ledger cryptographic integrity is intact (`ledger.verify_integrity() == True`).
+4. All requested scopes are in the permitted scope list.
+
+**Intended authorization:** Require a verified principal and require the
+requested DID to match that principal. No such authentication mechanism is
+currently implemented.
+
+**Request body:**
+```json
+{
+  "did": "did:mesh:key:z6Mku...",
+  "scope": ["read:profile", "write:did"],
+  "audience": "idp-mesh-api",
+  "extra_claims": {}
+}
+```
+
+**Intended future response after authentication integration (201):**
+```json
+{
+  "access_token": "eyJhbGciOiJFZERTQSI...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "jti": "550e8400-e29b-41d4-a716-446655440000",
+  "did": "did:mesh:key:z6Mku...",
+  "scope": ["read:profile", "write:did"]
+}
+```
+
+**Intended future policy response (403):**
+```json
+{
+  "detail": "Ledger cryptographic integrity compromised: Data tampering detected... Token issuance halted."
+}
+```
+
+**Status:** Route present; operation currently unavailable pending verified-principal authentication.
+
+---
+
+### 3.7 POST /api/v1/tokens/verify
+
+**Purpose:** Verify a JWT's Ed25519 signature, expiration, and revocation status in the deny-list.
+
+**Request body:**
+```json
+{
+  "token": "eyJhbGciOiJFZERTQSI..."
+}
+```
+
+**Response 200 (Valid):**
+```json
+{
+  "valid": true,
+  "claims": {
+    "sub": "did:mesh:key:z6Mku...",
+    "jti": "550e8400-...",
+    "scope": ["read:profile"],
+    "exp": 1729000000
+  },
+  "error": null
+}
+```
+
+**Response 200 (Revoked / Expired):**
+```json
+{
+  "valid": false,
+  "claims": null,
+  "error": "Token (jti=550e8400-...) has been explicitly revoked."
+}
+```
+
+**Owner:** Member 5 (implemented)
+
+---
+
+### 3.8 POST /api/v1/tokens/revoke — Proposed future behavior
+
+**Current implementation:** This operation returns `503 Service Unavailable`
+without changing revocation state. Token ownership checks and verified-principal
+authentication are not integrated; a caller-supplied JTI does not prove
+ownership.
+
+Current response:
+```json
+{"detail": "Token revocation is unavailable until authenticated token ownership is integrated."}
+```
+
+**Intended purpose:** Revoke an active JWT access token by adding its JTI to
+the deny-list after verifying that the caller is authorized to revoke it.
+
+**Request body:**
+```json
+{
+  "jti": "550e8400-e29b-41d4-a716-446655440000",
+  "reason": "Administrative revocation via dashboard"
+}
+```
+
+**Intended future response after ownership authorization (200):**
+```json
+{
+  "revoked": true,
+  "jti": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Token (jti=550e8400-...) has been revoked and added to the deny-list."
+}
+```
+
+**Status:** Route present; operation currently unavailable pending token-ownership authorization.
+
+---
+
+### 3.9 GET /api/v1/tokens/public-key
+
+**Purpose:** Retrieve the active Ed25519 public signing key (PEM) for independent token verification.
+
+**Response 200:**
+```json
+{
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...\n-----END PUBLIC KEY-----\n",
+  "algorithm": "EdDSA",
+  "issuer": "idp-mesh-v1"
+}
+```
+
+**Owner:** Member 5 (implemented)
+
+---
+
+### 3.10 GET /api/v1/tokens/policy/scopes
+
+**Purpose:** Retrieve the policy-permitted scope strings.
+
+**Response 200:**
+```json
+{
+  "scopes": ["read:profile", "write:did", "admin:ledger", "auth:webauthn"]
+}
+```
+
+**Owner:** Member 5 (implemented)
 
 ---
 
@@ -392,13 +555,15 @@ class SecurityEvent(BaseModel):
 
 | Dependency | Member | Required for | Interface needed | Status |
 |---|---|---|---|---|
-| `app/main.py` with router mounting | Member 1 | All endpoints to work | `app.include_router(ledger_router, prefix="/api/v1")` | MISSING |
-| Security event store | Members 2 and 5 | `GET /events` dashboard | Queryable list (SQLite table or Redis list) | MISSING |
-| JWT verification utility | Member 5 | Dashboard auth middleware | `verify_token(token) -> payload` | MISSING |
-| Admin role claim definition | Member 5 | Authorization | JWT claim name and value | UNKNOWN |
-| DID count / revocation list | Members 1 and 3 | Summary statistics | `GET /api/v1/identity/stats` or equivalent | MISSING |
-| Health check endpoints | All members | Service health panel | Standard `/health` or `/status` per service | MISSING |
-| Redis connection config | Member 5 | Health check | `REDIS_URL` env variable | UNKNOWN |
+| `app/main.py` with router mounting | Member 1 | Central API entry point | `app.include_router(ledger_router, prefix="/api/v1")`, `app.include_router(tokens_router, prefix="/api/v1")` | MISSING (Member 1) |
+| Security event store | Members 2 and 5 | `GET /api/v1/dashboard/events` | Queryable audit store (SQLite / Redis / append-log) | MISSING (Members 2 & 5) |
+| JWT verification utility | Member 5 | Token authentication & inspection | `verify_token(token, public_key) -> claims` & `POST /api/v1/tokens/verify` | IMPLEMENTED (Member 5) |
+| Token Revocation Store | Member 5 | JTI deny-list component | `TokenRevocationStore`; HTTP revoke route currently returns 503 pending ownership checks | COMPONENT IMPLEMENTED / ROUTE UNAVAILABLE |
+| Zero-Trust Policy Engine | Member 5 | Policy evaluation component | `ZeroTrustPolicyEngine`; HTTP issue route currently returns 503 pending verified-principal authentication | COMPONENT IMPLEMENTED / ROUTE UNAVAILABLE |
+| Admin role claim definition | Member 5 | Future role-based authorization | Define a trusted claim after authentication integration | PENDING |
+| DID count / revocation status | Members 1, 3, 4 | Summary statistics | Derived from `GET /api/v1/ledger` blocks; dedicated `GET /api/v1/identity/stats` pending | DERIVED / PENDING |
+| Composite Health check | Member 1 | Unified service health panel | `GET /api/v1/dashboard/health` or `/health` aggregating all nodes | PENDING (Member 1) |
+| Redis connection config | Member 5 | Revocation store | `REDIS_URL` env variable (in-memory fallback active) | CONFIGURED |
 
 ---
 
@@ -419,7 +584,7 @@ The dashboard API adopts FastAPI's default error format:
 | 403 | Authenticated but insufficient privileges |
 | 404 | Resource not found |
 | 500 | Internal server error |
-| 503 | Service unavailable (downstream dependency down) |
+| 503 | Service unavailable (required integration unavailable or downstream dependency down) |
 
 ---
 
