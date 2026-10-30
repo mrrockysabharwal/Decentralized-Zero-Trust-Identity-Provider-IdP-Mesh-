@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Header
 from typing import Optional
+from backend.oidc.service import generate_authorization_code
 
 router = APIRouter(prefix="/oidc", tags=["OIDC"])
 
@@ -20,7 +21,9 @@ async def openid_configuration():
     }
 
 
-# 2. Authorization Endpoint
+
+import re
+
 @router.get("/authorize")
 async def authorize(
     response_type: str = Query(...),
@@ -28,27 +31,30 @@ async def authorize(
     redirect_uri: str = Query(...),
     scope: str = Query("openid"),
     state: Optional[str] = Query(None),
+    code_challenge: str = Query(...),
+    code_challenge_method: str = Query("S256"),
 ):
     if response_type != "code":
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported response_type",
-        )
+        raise HTTPException(status_code=400, detail="Unsupported response_type")
 
     if "openid" not in scope.split():
-        raise HTTPException(
-            status_code=400,
-            detail="The openid scope is required",
-        )
+        raise HTTPException(status_code=400, detail="The openid scope is required")
 
-    # Client registration, redirect URI validation,
-    # user authentication, and authorization-code
-    # generation must be implemented before this
-    # endpoint can complete the authorization flow.
+    if code_challenge_method != "S256":
+        raise HTTPException(status_code=400, detail="Only PKCE S256 is supported")
+
+    # RFC 7636: an S256 challenge is 43 characters
+    # for a SHA-256 digest encoded using Base64URL without padding.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+        raise HTTPException(status_code=400, detail="Invalid PKCE code_challenge")
+
+    # Do not issue a code until client registration,
+    # redirect URI validation, and user authentication exist.
     raise HTTPException(
         status_code=501,
-        detail="Authorization flow is not implemented yet",
+        detail="Client validation and authenticated OIDC session are not implemented yet",
     )
+
 
 
 # 3. Token Exchange Endpoint
