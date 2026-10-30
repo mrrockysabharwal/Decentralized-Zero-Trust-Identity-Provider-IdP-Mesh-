@@ -65,7 +65,7 @@ class ChallengeStore:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
+    #testing
     def create_challenge(self, did: str, ceremony: str) -> tuple[bytes, str]:
         """Generate a fresh challenge for the given DID and ceremony type.
 
