@@ -1,6 +1,12 @@
 from fastapi import APIRouter, HTTPException, Query, Header
 from typing import Optional
-from backend.oidc.service import generate_authorization_code
+from backend.oidc.service import (
+    generate_authorization_code,
+    validate_client_redirect_uri,
+    create_authorization_transaction,
+)
+from fastapi.responses import RedirectResponse
+from urllib.parse import urlencode
 
 router = APIRouter(prefix="/oidc", tags=["OIDC"])
 
@@ -36,6 +42,11 @@ async def authorize(
 ):
     if response_type != "code":
         raise HTTPException(status_code=400, detail="Unsupported response_type")
+    if not validate_client_redirect_uri(client_id, redirect_uri):
+        raise HTTPException(
+        status_code=400,
+        detail="Invalid client_id or redirect_uri",
+    )
 
     if "openid" not in scope.split():
         raise HTTPException(status_code=400, detail="The openid scope is required")

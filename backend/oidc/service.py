@@ -205,3 +205,194 @@ def consume_authorization_code(
             "redirect_uri": row["redirect_uri"],
             "scope": row["scope"],
         }
+
+def register_client(client_id: str, redirect_uris: list[str]):
+    """Register a client with its explicitly allowed redirect URIs."""
+    if not client_id or not redirect_uris:
+        raise ValueError("client_id and redirect_uris are required")
+
+    if any(not uri.startswith("http://localhost") and
+           not uri.startswith("http://127.0.0.1") and
+           not uri.startswith("https://") for uri in redirect_uris):
+        raise ValueError("Redirect URI must use HTTPS or a local development address")
+
+    initialize_database()
+
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS oidc_clients (
+                client_id TEXT PRIMARY KEY,
+                redirect_uris TEXT NOT NULL
+            )
+        """)
+        import json
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO oidc_clients (client_id, redirect_uris)
+            VALUES (?, ?)
+            """,
+            (client_id, json.dumps(redirect_uris)),
+        )
+
+
+def validate_client_redirect_uri(client_id: str, redirect_uri: str) -> bool:
+    """Accept only redirect URIs registered for this client."""
+    import json
+
+    initialize_database()
+
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS oidc_clients (
+                client_id TEXT PRIMARY KEY,
+                redirect_uris TEXT NOT NULL
+            )
+        """)
+        row = conn.execute(
+            "SELECT redirect_uris FROM oidc_clients WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+
+    if row is None:
+        return False
+
+    return redirect_uri in json.loads(row["redirect_uris"])
+
+def get_registered_client_redirect_uris(client_id: str) -> list[str]:
+    """Return the exact redirect URIs registered for a client."""
+    import json
+
+    initialize_database()
+
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS oidc_clients (
+                client_id TEXT PRIMARY KEY,
+                redirect_uris TEXT NOT NULL
+            )
+        """)
+        row = conn.execute(
+            "SELECT redirect_uris FROM oidc_clients WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+
+    if row is None:
+        return []
+
+    return json.loads(row["redirect_uris"])
+
+
+TRANSACTION_TTL_SECONDS = 300
+
+
+def create_authorization_transaction(
+    client_id: str,
+    redirect_uri: str,
+    scope: str,
+    state: str,
+    code_challenge: str,
+    code_challenge_method: str = "S256",
+) -> str:
+    """Create a short-lived transaction for a pending OIDC authorization."""
+    import re
+
+    if not validate_client_redirect_uri(client_id, redirect_uri):
+        raise ValueError("Invalid client or redirect URI")
+
+    if "openid" not in scope.split():
+        raise ValueError("The openid scope is required")
+
+    if code_challenge_method != "S256":
+        raise ValueError("Only PKCE S256 is supported")
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+        raise ValueError("Invalid PKCE code challenge")
+
+    initialize_database()
+
+    transaction_id = secrets.token_urlsafe(32)
+    transaction_hash = hash_code(transaction_id)
+    expires_at = (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=TRANSACTION_TTL_SECONDS)
+    ).isoformat()
+
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS oidc_transactions (
+                transaction_hash TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                redirect_uri TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                state TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                code_challenge_method TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO oidc_transactions (
+                transaction_hash, client_id, redirect_uri,
+                scope, state, code_challenge,
+                code_challenge_method, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            transaction_hash,
+            client_id,
+            redirect_uri,
+            scope,
+            state,
+            code_challenge,
+            code_challenge_method,
+            expires_at,
+        ))
+
+    return transaction_id
+
+
+def get_authorization_transaction(transaction_id: str):
+    """Retrieve an unexpired OIDC transaction without consuming it."""
+    if not transaction_id:
+        return None
+
+    initialize_database()
+
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS oidc_transactions (
+                transaction_hash TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                redirect_uri TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                state TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                code_challenge_method TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
+        row = conn.execute("""
+            SELECT * FROM oidc_transactions
+            WHERE transaction_hash = ?
+        """, (hash_code(transaction_id),)).fetchone()
+
+    if row is None:
+        return None
+
+    try:
+        expires_at = datetime.fromisoformat(row["expires_at"])
+    except ValueError:
+        return None
+
+    if expires_at <= datetime.now(timezone.utc):
+        return None
+
+    return {
+        "client_id": row["client_id"],
+        "redirect_uri": row["redirect_uri"],
+        "scope": row["scope"],
+        "state": row["state"],
+        "code_challenge": row["code_challenge"],
+        "code_challenge_method": row["code_challenge_method"],
+    }
