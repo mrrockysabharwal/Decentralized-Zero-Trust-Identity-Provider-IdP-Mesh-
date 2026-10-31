@@ -101,3 +101,10 @@ class TestLedgerTamperChainReaction:
         data = client.get("/api/v1/admin/health").json()
         ledger_sub = next(s for s in data["subsystems"] if s["name"] == "ledger")
         assert ledger_sub["status"] == "degraded"
+
+    @classmethod
+    def teardown_class(cls):
+        from app.modules.ledger.router import ledger_instance
+        with ledger_instance._lock:
+            ledger_instance._chain.clear()
+            ledger_instance._create_genesis_record()

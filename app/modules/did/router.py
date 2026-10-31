@@ -315,7 +315,12 @@ def update_did(did: str, payload: DIDUpdateRequest) -> DIDUpdateResponse:
     response_model=DIDDeactivateResponse,
     summary="Deactivate a DID and anchor a DEACTIVATE record",
 )
-def deactivate_did(did: str, payload: DIDDeactivateRequest) -> DIDDeactivateResponse:
+def deactivate_did(
+    did: str,
+    payload: Optional[DIDDeactivateRequest] = None,
+) -> DIDDeactivateResponse:
+    if payload is None:
+        payload = DIDDeactivateRequest()
     """Mark a DID as deactivated in the in-process registry and anchor a
     `DEACTIVATE` event on the SimulatedLedger.
 

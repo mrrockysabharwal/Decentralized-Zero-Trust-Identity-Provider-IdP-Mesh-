@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="TrustMesh identity security administration and ledger audit.">
+  <meta name="theme-color" content="#101521">
+  <title>TrustMesh · Admin Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Administrative navigation">
+      <a class="brand" href="#overview" aria-label="TrustMesh home">
+        <span class="brand-mark" aria-hidden="true">◇</span>
+        <span><strong>TrustMesh</strong><small>Identity mesh</small></span>
+      </a>
+
+      <div class="nav-caption">Workspace</div>
+      <nav aria-label="Dashboard sections">
+        <a class="nav-link active" href="#overview" data-section="overview"><span class="nav-icon" aria-hidden="true">◫</span>Overview</a>
+        <a class="nav-link" href="#identities" data-section="identities"><span class="nav-icon" aria-hidden="true">◎</span>Identities</a>
+        <a class="nav-link" href="#ledger" data-section="ledger"><span class="nav-icon" aria-hidden="true">▤</span>Ledger audit</a>
+        <a class="nav-link" href="#tokens" data-section="tokens"><span class="nav-icon" aria-hidden="true">⬡</span>Token security</a>
+        <a class="nav-link" href="#events" data-section="events"><span class="nav-icon" aria-hidden="true">≋</span>Security events</a>
+        <a class="nav-link" href="#health" data-section="health"><span class="nav-icon" aria-hidden="true">◉</span>Service health</a>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="mesh-label"><span class="status-dot" id="sidebar-status-dot"></span><span id="sidebar-status">Connecting to mesh</span></div>
+        <div class="sidebar-footnote">Decentralized identity<br>Zero-trust administration</div>
+      </div>
+    </aside>
+
+    <div class="scrim" id="scrim" hidden></div>
+    <div class="main-column">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar"><span aria-hidden="true">☰</span></button>
+        <div class="topbar-title"><span class="eyebrow">ADMINISTRATION</span><h1 id="page-title">Overview</h1></div>
+        <div class="topbar-actions">
+          <div class="connection-chip" id="connection-chip" role="status" aria-live="polite"><span class="status-dot"></span><span id="connection-label">Checking API</span></div>
+          <button class="button button-tonal" id="refresh-button" type="button"><span aria-hidden="true">↻</span><span>Refresh</span></button>
+        </div>
+      </header>
+
+      <main id="main-content" tabindex="-1">
+        <div class="notice notice-warning" id="connection-notice" role="status" hidden>
+          <span class="notice-icon" aria-hidden="true">!</span>
+          <div><strong>Live data is unavailable</strong><p id="connection-message">Could not reach the FastAPI service. Values will remain unavailable until the API responds.</p></div>
+          <button class="icon-button notice-close" id="dismiss-notice" type="button" aria-label="Dismiss connection notice">×</button>
+        </div>
+
+        <section class="page-section active" id="section-overview" aria-labelledby="overview-heading">
+          <div class="page-heading"><div><p class="eyebrow">MESH STATUS</p><h2 id="overview-heading">Identity security at a glance</h2><p class="supporting-text">Live ledger state and configured token verification details.</p></div><div class="updated-label" id="last-updated">Waiting for first refresh</div></div>
+          <div class="metric-grid" aria-label="Current mesh metrics">
+            <article class="metric-card"><div class="metric-top"><span class="metric-icon icon-blue" aria-hidden="true">▤</span><span class="metric-label">Ledger records</span></div><strong class="metric-value" id="metric-records">—</strong><span class="metric-foot" id="metric-records-foot">Waiting for API</span></article>
+            <article class="metric-card"><div class="metric-top"><span class="metric-icon icon-teal" aria-hidden="true">◎</span><span class="metric-label">Identity records</span></div><strong class="metric-value" id="metric-identities">—</strong><span class="metric-foot" id="metric-identities-foot">Derived from ledger history</span></article>
+            <article class="metric-card"><div class="metric-top"><span class="metric-icon icon-green" aria-hidden="true">✓</span><span class="metric-label">Ledger integrity</span></div><strong class="metric-value metric-status" id="metric-integrity">Checking</strong><span class="metric-foot" id="metric-integrity-foot">SHA-256 chain audit</span></article>
+            <article class="metric-card"><div class="metric-top"><span class="metric-icon icon-violet" aria-hidden="true">⬡</span><span class="metric-label">Token signing</span></div><strong class="metric-value" id="metric-signing">—</strong><span class="metric-foot" id="metric-signing-foot">Configured public key status</span></article>
+          </div>
+
+          <div class="content-grid overview-grid">
+            <section class="surface-card" aria-labelledby="recent-ledger-heading">
+              <div class="card-heading"><div><h3 id="recent-ledger-heading">Recent ledger activity</h3><p>Latest identity anchors from the live ledger.</p></div><a class="text-link" href="#ledger">View ledger <span aria-hidden="true">→</span></a></div>
+              <div class="table-wrap compact-table"><table><thead><tr><th scope="col">Record</th><th scope="col">Identity</th><th scope="col">Operation</th><th scope="col">Time</th></tr></thead><tbody id="recent-ledger-body"><tr><td colspan="4"><div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading ledger records…</div></td></tr></tbody></table></div>
+            </section>
+            <section class="surface-card" aria-labelledby="mesh-health-heading">
+              <div class="card-heading"><div><h3 id="mesh-health-heading">Mesh health</h3><p>Services reported by the application health route.</p></div><a class="text-link" href="#health">Details <span aria-hidden="true">→</span></a></div>
+              <div class="health-list" id="overview-health-list"><div class="inline-state"><span class="spinner" aria-hidden="true"></span>Checking services…</div></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page-section" id="section-identities" aria-labelledby="identities-heading" hidden>
+          <div class="page-heading"><div><p class="eyebrow">LEDGER-DERIVED</p><h2 id="identities-heading">Identity records</h2><p class="supporting-text">Latest state for each DID found in the ledger. This is not a separate identity registry.</p></div></div>
+          <section class="surface-card">
+            <div class="toolbar"><div><h3>Known DIDs</h3><p id="identity-count">Loading records…</p></div><label class="search-field"><span class="sr-only">Search identities</span><span aria-hidden="true">⌕</span><input id="identity-search" type="search" placeholder="Search DID"></label></div>
+            <div class="table-wrap"><table><thead><tr><th scope="col">DID</th><th scope="col">Latest operation</th><th scope="col">Last updated</th><th scope="col">Record</th></tr></thead><tbody id="identity-table-body"><tr><td colspan="4"><div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading identity records…</div></td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="page-section" id="section-ledger" aria-labelledby="ledger-heading" hidden>
+          <div class="page-heading"><div><p class="eyebrow">MODULE C</p><h2 id="ledger-heading">Ledger audit</h2><p class="supporting-text">Inspect hash-linked identity records and run an integrity check.</p></div><button class="button button-tonal" id="audit-button" type="button">Run integrity audit</button></div>
+          <div class="integrity-banner" id="integrity-banner" role="status"><span class="integrity-symbol" id="integrity-symbol">…</span><div><strong id="integrity-title">Waiting for audit</strong><p id="integrity-description">The API will report the current chain status.</p></div></div>
+          <section class="surface-card">
+            <div class="toolbar"><div><h3>Ledger records</h3><p id="ledger-count">Loading records…</p></div><button class="button button-text" id="export-ledger-button" type="button" disabled>Export CSV</button></div>
+            <div class="table-wrap"><table><thead><tr><th scope="col">Index</th><th scope="col">Timestamp</th><th scope="col">DID</th><th scope="col">Operation</th><th scope="col">Record hash</th><th scope="col">Previous hash</th></tr></thead><tbody id="ledger-table-body"><tr><td colspan="6"><div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading ledger records…</div></td></tr></tbody></table></div>
+          </section>
+          <details class="disclosure-card"><summary>Demonstration-only tamper simulation</summary><div class="disclosure-content"><p>This supported endpoint mutates a ledger record to demonstrate integrity detection. Use only against a disposable local ledger.</p><button class="button button-danger-tonal" id="open-tamper-dialog" type="button">Open simulation</button></div></details>
+        </section>
+
+        <section class="page-section" id="section-tokens" aria-labelledby="tokens-heading" hidden>
+          <div class="page-heading"><div><p class="eyebrow">MODULE E</p><h2 id="tokens-heading">Token security</h2><p class="supporting-text">View the active public verification key, policy scopes, and supported token validation.</p></div></div>
+          <div class="content-grid token-grid">
+            <section class="surface-card"><div class="card-heading"><div><h3>Signing configuration</h3><p>Public information returned by the token service.</p></div><span class="status-chip neutral" id="key-status">Checking</span></div><dl class="details-list"><div><dt>Algorithm</dt><dd id="key-algorithm">—</dd></div><div><dt>Issuer</dt><dd id="key-issuer">—</dd></div><div><dt>Public key</dt><dd><pre class="public-key" id="public-key">Waiting for API…</pre></dd></div></dl><div class="scope-area"><h4>Allowed scopes</h4><div class="scope-list" id="scope-list"><span class="muted">Loading scopes…</span></div></div></section>
+            <section class="surface-card"><div class="card-heading"><div><h3>Verify a token</h3><p>Validation sends the token to the configured API. The input is masked and cleared after submission.</p></div><span class="endpoint-label">POST /tokens/verify</span></div><form id="verify-form"><label class="field-label" for="verify-token">JWT bearer token</label><input id="verify-token" class="text-field mono" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required placeholder="Paste a token only when appropriate"><div class="form-actions"><button class="button button-primary" id="verify-button" type="submit">Verify token</button><button class="button button-text" id="clear-token-button" type="button">Clear input</button></div></form><div class="result-panel" id="verify-result" role="status" aria-live="polite" hidden></div></section>
+          </div>
+          <div class="content-grid unavailable-grid">
+            <section class="unavailable-card"><span class="unavailable-icon" aria-hidden="true">Ⅱ</span><div><h3>Token issuance unavailable</h3><p>The API currently returns <code>503 Service Unavailable</code> until verified caller authentication is integrated. No issuance action is available here.</p></div><span class="status-chip warning">Unavailable</span></section>
+            <section class="unavailable-card"><span class="unavailable-icon" aria-hidden="true">Ⅱ</span><div><h3>Token revocation unavailable</h3><p>The API currently returns <code>503 Service Unavailable</code> until token ownership authorization is integrated. No revocation action is available here.</p></div><span class="status-chip warning">Unavailable</span></section>
+          </div>
+        </section>
+
+        <section class="page-section" id="section-events" aria-labelledby="events-heading" hidden>
+          <div class="page-heading"><div><p class="eyebrow">AUDIT TELEMETRY</p><h2 id="events-heading">Security events</h2><p class="supporting-text">Cross-module event history is not available from the current API.</p></div></div>
+          <div class="empty-card"><span class="empty-icon" aria-hidden="true">≋</span><h3>No security events endpoint</h3><p>The project does not currently expose an event-store route. Ledger records and integrity status are shown in their respective sections; no events are synthesized here.</p><a class="button button-tonal" href="#ledger">Review ledger activity</a></div>
+        </section>
+
+        <section class="page-section" id="section-health" aria-labelledby="health-heading" hidden>
+          <div class="page-heading"><div><p class="eyebrow">RUNTIME</p><h2 id="health-heading">Service health</h2><p class="supporting-text">Status reported by the FastAPI health response.</p></div><button class="button button-tonal" id="health-refresh-button" type="button">Refresh status</button></div>
+          <div class="health-grid" id="health-grid"><div class="surface-card"><div class="inline-state"><span class="spinner" aria-hidden="true"></span>Checking service health…</div></div></div>
+          <p class="footnote">The backend health route reports current subsystem fields. It does not provide live latency measurements for every service.</p>
+        </section>
+      </main>
+      <footer class="app-footer"><span>TrustMesh · Decentralized Zero-Trust IdP Mesh</span><span id="footer-api-status">API status unknown</span></footer>
+    </div>
+  </div>
+
+  <dialog class="modal" id="tamper-dialog" aria-labelledby="tamper-title">
+    <form id="tamper-form" method="dialog">
+      <div class="modal-heading"><div><p class="eyebrow">DEMONSTRATION ONLY</p><h2 id="tamper-title">Simulate ledger tampering</h2></div><button class="icon-button" id="tamper-close" type="button" aria-label="Close dialog">×</button></div>
+      <p class="supporting-text">This calls the live tamper endpoint and changes the selected record. Use only with a disposable local ledger.</p>
+      <label class="field-label" for="tamper-index">Record index</label><select class="text-field" id="tamper-index" required></select>
+      <label class="field-label" for="tamper-field">Field to modify</label><select class="text-field" id="tamper-field"><option value="did">DID</option><option value="doc_hash">Document hash</option><option value="previous_hash">Previous hash</option></select>
+      <label class="field-label" for="tamper-value">Replacement value</label><input class="text-field" id="tamper-value" required value="tampered-demo-value">
+      <p class="form-error" id="tamper-error" role="alert" hidden></p>
+      <div class="form-actions"><button class="button button-text" id="tamper-cancel" type="button">Cancel</button><button class="button button-danger" id="tamper-submit" type="submit">Run tamper simulation</button></div>
+    </form>
+  </dialog>
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>
