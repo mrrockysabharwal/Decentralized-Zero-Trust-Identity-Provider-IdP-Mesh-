@@ -31,6 +31,9 @@ Thumbs.db
 # Data & local runtime artifacts
 data/*.json
 !data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
 
-# Locally generated signing private keys; public keys remain trackable
-.token_keys/*private*
+# Locally generated signing keys (public and private)
+.token_keys/

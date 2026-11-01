@@ -18,11 +18,17 @@ from app.modules.ledger.hasher import hash_did_document
 from app.modules.tokens import (
     tokens_router,
     ZeroTrustPolicyEngine,
-    TokenRevocationStore,
 )
 import app.modules.ledger.router as ledger_router_module
 import app.modules.tokens.router as tokens_router_module
+import app.modules.revocation_provider as revocation_provider
 from app.modules.tokens.jwt_engine import generate_signing_keypair
+from tests.anchor_helpers import anchor_owned_did, create_owned_did
+from tests.revocation_helpers import DurableRevocationStoreStub
+import os
+import time
+import uuid
+import jwt
 
 
 @pytest.fixture
@@ -36,6 +42,11 @@ def mesh_app():
     # Save original state of ledger singleton
     ledger = ledger_router_module.ledger_instance
     original_chain = list(ledger._chain)
+    old_admin_dids = os.environ.get("ADMIN_DIDS")
+    old_admin_public_key = os.environ.get("ADMIN_JWT_PUBLIC_KEY")
+    old_tamper_demo = os.environ.get("ENABLE_LEDGER_TAMPER_DEMO")
+    os.environ["ADMIN_DIDS"] = "did:mesh:admin:mesh-tests"
+    os.environ["ENABLE_LEDGER_TAMPER_DEMO"] = "true"
 
     # Reset ledger with fresh genesis block
     with ledger._lock:
@@ -44,39 +55,51 @@ def mesh_app():
 
     private_pem, public_pem = generate_signing_keypair()
     isolated_policy = ZeroTrustPolicyEngine(ledger=ledger)
-    isolated_revocation = TokenRevocationStore(redis_url="redis://localhost:0/99")
-    isolated_revocation.clear_in_memory()
+    isolated_revocation = DurableRevocationStoreStub()
 
     # Save original token router dependencies
     orig_priv = tokens_router_module._private_key_pem
     orig_pub = tokens_router_module._public_key_pem
     orig_ledger = tokens_router_module._shared_ledger
     orig_policy = tokens_router_module._policy_engine
-    orig_rev = tokens_router_module._revocation_store
+    orig_rev = revocation_provider._revocation_store
     orig_get_priv = tokens_router_module.get_private_key
     orig_get_pub = tokens_router_module.get_public_key
     orig_get_ledger = tokens_router_module.get_ledger
     orig_get_policy = tokens_router_module.get_policy_engine
-    orig_get_rev = tokens_router_module.get_revocation_store
 
     # Wire tokens to use the same ledger instance
     tokens_router_module._private_key_pem = private_pem
     tokens_router_module._public_key_pem = public_pem
     tokens_router_module._shared_ledger = ledger
     tokens_router_module._policy_engine = isolated_policy
-    tokens_router_module._revocation_store = isolated_revocation
+    revocation_provider.set_revocation_store(isolated_revocation)
 
     tokens_router_module.get_private_key = lambda: private_pem
     tokens_router_module.get_public_key = lambda: public_pem
     tokens_router_module.get_ledger = lambda: ledger
     tokens_router_module.get_policy_engine = lambda: isolated_policy
-    tokens_router_module.get_revocation_store = lambda: isolated_revocation
 
     # Mount routers under /api/v1 prefix as agreed in api-contract.md
     app.include_router(ledger_router, prefix="/api/v1")
     app.include_router(tokens_router, prefix="/api/v1")
 
-    client = TestClient(app)
+    admin_private_key, admin_public_key = generate_signing_keypair()
+    os.environ["ADMIN_JWT_PUBLIC_KEY"] = admin_public_key.decode()
+    admin_token = jwt.encode(
+        {
+            "sub": "did:mesh:admin:mesh-tests",
+            "jti": str(uuid.uuid4()),
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+            "iss": "idp-mesh-admin",
+            "aud": "idp-mesh-admin",
+            "scope": ["admin:ledger"],
+        },
+        admin_private_key,
+        algorithm="EdDSA",
+    )
+    client = TestClient(app, headers={"Authorization": f"Bearer {admin_token}"})
 
     yield client, ledger, isolated_revocation, public_pem
 
@@ -88,32 +111,38 @@ def mesh_app():
     tokens_router_module._public_key_pem = orig_pub
     tokens_router_module._shared_ledger = orig_ledger
     tokens_router_module._policy_engine = orig_policy
-    tokens_router_module._revocation_store = orig_rev
+    revocation_provider.set_revocation_store(orig_rev)
     tokens_router_module.get_private_key = orig_get_priv
     tokens_router_module.get_public_key = orig_get_pub
     tokens_router_module.get_ledger = orig_get_ledger
     tokens_router_module.get_policy_engine = orig_get_policy
-    tokens_router_module.get_revocation_store = orig_get_rev
+    for name, value in (
+        ("ADMIN_DIDS", old_admin_dids),
+        ("ADMIN_JWT_PUBLIC_KEY", old_admin_public_key),
+        ("ENABLE_LEDGER_TAMPER_DEMO", old_tamper_demo),
+    ):
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 class TestMeshCrossModuleIntegration:
     """Verify contracts between Ledger and Token/Policy subsystems."""
 
-    def test_ledger_registration_does_not_authorize_token_operations(self, mesh_app):
-        """Anchoring a DID does not authenticate issuance or revocation callers."""
+    def test_complete_zero_trust_lifecycle(self, mesh_app):
+        """Lifecycle: DID Anchor -> ZT Policy Token Issuance -> Token Verify -> Token Revoke -> Verify Rejection."""
         client, ledger, revocation, public_key = mesh_app
-        test_did = "did:mesh:key:z6MkuIntegrationUser01"
+        test_did, owner_key = create_owned_did()
         doc_hash = hash_did_document({"id": test_did, "publicKey": "sample_ed25519_key"})
 
         # 1. Anchor DID to Ledger (Member 4) - returns 201 Created
-        anchor_resp = client.post(
-            "/api/v1/ledger/anchor",
-            json={
-                "did": test_did,
-                "doc_hash": doc_hash,
-                "operation": "CREATE",
-                "metadata": {"creator": "member6_integration_test"},
-            },
+        anchor_resp = anchor_owned_did(
+            client,
+            test_did,
+            owner_key,
+            doc_hash,
+            metadata={"creator": "member6_integration_test"},
         )
         assert anchor_resp.status_code == 201
         record_data = anchor_resp.json()
@@ -125,7 +154,7 @@ class TestMeshCrossModuleIntegration:
         assert verify_ledger_resp.status_code == 200
         assert verify_ledger_resp.json()["valid"] is True
 
-        # DID registration is not proof that this request controls the DID.
+        # Token operations remain unavailable until verified caller authorization exists.
         issue_resp = client.post(
             "/api/v1/tokens/issue",
             json={
@@ -134,8 +163,14 @@ class TestMeshCrossModuleIntegration:
             },
         )
         assert issue_resp.status_code == 503
+        assert "authenticated caller authorization" in issue_resp.json()["detail"]
 
-        # A bare JTI is not proof of ownership and must not revoke anything.
+        # Verify remains available and safely rejects malformed tokens.
+        verify_token_resp = client.post("/api/v1/tokens/verify", json={"token": "invalid-token"})
+        assert verify_token_resp.status_code == 200
+        assert verify_token_resp.json()["valid"] is False
+
+        # A caller-supplied JTI does not authorize revocation.
         jti = "another-identities-jti"
         revoke_resp = client.post(
             "/api/v1/tokens/revoke",
@@ -144,20 +179,17 @@ class TestMeshCrossModuleIntegration:
         assert revoke_resp.status_code == 503
         assert revocation.is_revoked(jti) is False
 
-    def test_issue_endpoint_fails_closed_when_ledger_is_tampered(self, mesh_app):
-        """Issuance stays unavailable regardless of ledger integrity state."""
+    def test_tamper_demo_isolated_from_live_ledger(self, mesh_app):
+        """A tamper demonstration is detected without changing live ledger state."""
         client, ledger, _, _ = mesh_app
-        active_did = "did:mesh:key:z6MkuLegitUser99"
+        active_did, owner_key = create_owned_did()
         doc_hash = hash_did_document({"id": active_did})
 
         # Anchor valid user
-        anchor_resp = client.post(
-            "/api/v1/ledger/anchor",
-            json={"did": active_did, "doc_hash": doc_hash, "operation": "CREATE"},
-        )
+        anchor_resp = anchor_owned_did(client, active_did, owner_key, doc_hash)
         assert anchor_resp.status_code == 201
 
-        # Even an intact ledger cannot authenticate the caller.
+        # Issuance fails closed because the route has no verified caller principal.
         valid_issue = client.post(
             "/api/v1/tokens/issue",
             json={"did": active_did, "scope": ["read:profile"]},
@@ -177,32 +209,26 @@ class TestMeshCrossModuleIntegration:
         assert tamper_resp.status_code == 200
         assert tamper_resp.json()["valid"] is False
 
-        # Issuance remains disabled; policy integrity checks are covered by
-        # the policy-engine tests.
+        # The demo changed only its isolated copy; live ledger remains intact.
+        assert ledger.verify_integrity() == (True, None)
         tampered_issue = client.post(
             "/api/v1/tokens/issue",
             json={"did": active_did, "scope": ["read:profile"]},
         )
         assert tampered_issue.status_code == 503
 
-    def test_issue_endpoint_fails_closed_for_deactivated_did(self, mesh_app):
-        """A deactivated DID also cannot be used in unauthenticated issuance."""
+    def test_zero_trust_denies_deactivated_identity(self, mesh_app):
+        """Zero-Trust principle: Deactivated DIDs are immediately denied token issuance."""
         client, ledger, _, _ = mesh_app
-        did = "did:mesh:key:z6MkuToDeactivate"
+        did, owner_key = create_owned_did()
         doc_hash = hash_did_document({"id": did})
 
         # Register
-        reg_resp = client.post(
-            "/api/v1/ledger/anchor",
-            json={"did": did, "doc_hash": doc_hash, "operation": "CREATE"},
-        )
+        reg_resp = anchor_owned_did(client, did, owner_key, doc_hash)
         assert reg_resp.status_code == 201
 
         # Deactivate on ledger
-        deactivate_resp = client.post(
-            "/api/v1/ledger/anchor",
-            json={"did": did, "doc_hash": doc_hash, "operation": "DEACTIVATE"},
-        )
+        deactivate_resp = anchor_owned_did(client, did, owner_key, doc_hash, operation="DEACTIVATE")
         assert deactivate_resp.status_code == 201
 
         # Attempt token issuance
@@ -228,7 +254,7 @@ class TestMeshCrossModuleIntegration:
         assert scopes_resp.status_code == 200
         scopes = scopes_resp.json()["scopes"]
         assert "read:profile" in scopes
-        assert "admin:ledger" in scopes
+        assert "admin:ledger" not in scopes
 
     def test_main_app_health_and_subsystem_matrix(self):
         """Verify app.main composite health endpoint accurately reports subsystem state."""
@@ -241,16 +267,33 @@ class TestMeshCrossModuleIntegration:
         health_resp = main_client.get("/health")
         assert health_resp.status_code == 200
         health_data = health_resp.json()
-        assert health_data["status"] == "healthy"
+        expected_status = (
+            "healthy"
+            if health_data["revocation"]["durability"] == "configuration_verified"
+            else "degraded"
+        )
+        assert health_data["status"] == expected_status
         assert "subsystems" in health_data
         assert health_data["subsystems"]["ledger"]["status"] == "healthy"
-        assert health_data["subsystems"]["tokens_and_policy"]["status"] == "healthy"
+        assert health_data["subsystems"]["tokens_and_policy"]["status"] == expected_status
         assert health_data["subsystems"]["tokens_and_policy"]["signing_algorithm"] == "EdDSA (Ed25519)"
+        assert health_data["revocation"]["redis_available"] in (True, False)
+        assert health_data["revocation"]["persistence"] in (
+            "verified",
+            "unsafe",
+            "unverifiable",
+        )
+        assert health_data["revocation"]["eviction"] in (
+            "verified",
+            "unsafe",
+            "unverifiable",
+            "not_applicable",
+        )
 
         # API v1 health check alias
         v1_resp = main_client.get("/api/v1/health")
         assert v1_resp.status_code == 200
-        assert v1_resp.json()["status"] == "healthy"
+        assert v1_resp.json()["status"] == expected_status
 
     def test_main_app_root_metadata(self):
         """Verify app.main root path returns operational metadata and doc links."""

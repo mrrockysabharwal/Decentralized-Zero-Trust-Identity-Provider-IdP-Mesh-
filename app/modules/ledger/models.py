@@ -72,6 +72,14 @@ class RecordCreateInput(BaseModel):
         default_factory=dict,
         description="Optional non-sensitive metadata (e.g., anchoring node id, version)"
     )
+    ownership_challenge: str | None = Field(
+        default=None,
+        description="Single-use challenge returned by POST /ledger/anchor/challenge.",
+    )
+    ownership_signature_b64: str | None = Field(
+        default=None,
+        description="Base64url Ed25519 signature over the canonical anchor proof message.",
+    )
 
     @field_validator("doc_hash")
     @classmethod

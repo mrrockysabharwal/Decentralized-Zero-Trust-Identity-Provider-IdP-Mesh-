@@ -12,6 +12,7 @@ Key management:
 """
 
 import hmac
+import math
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -23,9 +24,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from cryptography.hazmat.primitives import serialization
 
 from app.modules.tokens.models import (
+    ALLOWED_SCOPES,
     DEFAULT_TOKEN_EXPIRY_SECONDS,
+    MAX_TOKEN_LIFETIME_SECONDS,
     TOKEN_ISSUER,
     TOKEN_AUDIENCE,
+    validate_extra_token_claims,
 )
 
 
@@ -35,18 +39,14 @@ from app.modules.tokens.models import (
 _PRIVATE_KEY_FILENAME = "token_signing_private.pem"
 _PUBLIC_KEY_FILENAME = "token_signing_public.pem"
 
-# Claims controlled by token issuance or policy must never be caller-overridable.
-_RESERVED_CLAIMS = {
-    "sub",
-    "jti",
-    "iat",
-    "exp",
-    "iss",
-    "aud",
-    "scope",
-    "did_status",
-    "did_verified_at",
-}
+
+def _finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -77,19 +77,20 @@ def load_or_create_keys(key_dir: str | os.PathLike[str]) -> Tuple[bytes, bytes]:
     """Load and validate an existing Ed25519 key pair from *key_dir*.
 
     Args:
-        key_dir: Directory containing both provisioned PEM key files.
+        key_dir: Existing directory containing both provisioned PEM key files.
 
     Returns:
         (private_key_pem, public_key_pem) — both as PEM-encoded bytes.
-
     Raises:
-        RuntimeError: If a key file is missing, unreadable, malformed, or the
-            public key does not match the private key. This function never
-            creates or overwrites signing key files.
+        RuntimeError: If the directory or either key file is unavailable, invalid,
+            not Ed25519, or the public key does not match the private key. This
+            function never creates or overwrites signing key files.
     """
-    directory = Path(key_dir)
+    directory = Path(key_dir).expanduser()
     if not directory.is_dir():
-        raise RuntimeError("TOKEN_KEY_DIR must be an existing directory containing both signing key files.")
+        raise RuntimeError(
+            "TOKEN_KEY_DIR must be an existing directory containing both signing key files."
+        )
 
     private_path = directory / _PRIVATE_KEY_FILENAME
     public_path = directory / _PUBLIC_KEY_FILENAME
@@ -160,7 +161,7 @@ def issue_token(
         did: The Decentralized Identifier to issue the token for (becomes ``sub``).
         scope: List of permission scopes to embed in the token.
         private_key_pem: Ed25519 private key PEM bytes used to sign the token.
-        audience: JWT ``aud`` claim (defaults to TOKEN_AUDIENCE).
+        audience: Optional compatibility argument; only TOKEN_AUDIENCE is accepted.
         expiry_seconds: Token lifetime in seconds from ``iat``.
         did_verified_at: ISO timestamp of the last ledger anchoring event.
         did_status: Current DID status string (e.g. "ACTIVE").
@@ -168,7 +169,36 @@ def issue_token(
 
     Returns:
         (token_string, jti) — the signed JWT and its unique identifier.
+
+    Raises:
+        ValueError: If the audience, scope, or custom claims violate server policy.
     """
+    if audience is not None and audience != TOKEN_AUDIENCE:
+        raise ValueError("JWT audience is server-controlled and cannot be overridden.")
+    if (
+        isinstance(expiry_seconds, bool)
+        or not isinstance(expiry_seconds, int)
+        or not 1 <= expiry_seconds <= MAX_TOKEN_LIFETIME_SECONDS
+    ):
+        raise ValueError(
+            f"Token lifetime must be between 1 and {MAX_TOKEN_LIFETIME_SECONDS} seconds."
+        )
+
+    invalid_scopes = [
+        item
+        for item in scope
+        if not isinstance(item, str)
+        or item not in ALLOWED_SCOPES
+        or item.lower().startswith("admin:")
+    ]
+    if not scope or invalid_scopes:
+        rejected = invalid_scopes or scope
+        raise ValueError(
+            f"Requested scopes are not permitted for ordinary tokens: {rejected}."
+        )
+
+    safe_extra_claims = validate_extra_token_claims(extra_claims or {})
+
     now = datetime.now(timezone.utc)
     jti = str(uuid.uuid4())
 
@@ -178,16 +208,13 @@ def issue_token(
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=expiry_seconds)).timestamp()),
         "iss": TOKEN_ISSUER,
-        "aud": audience or TOKEN_AUDIENCE,
+        "aud": TOKEN_AUDIENCE,
         "scope": scope,
         "did_verified_at": did_verified_at or now.isoformat(),
         "did_status": did_status,
     }
 
-    if extra_claims:
-        # Keep custom claims while preserving all issuance- and policy-owned claims.
-        safe_extras = {k: v for k, v in extra_claims.items() if k not in _RESERVED_CLAIMS}
-        payload.update(safe_extras)
+    payload.update(safe_extra_claims)
 
     private_key_obj = _load_private_key(private_key_pem)
     token_str = jwt.encode(payload, private_key_obj, algorithm="EdDSA")  # type: ignore[arg-type]
@@ -218,15 +245,27 @@ def verify_token(
         jwt.ExpiredSignatureError: If the token has expired.
         jwt.InvalidTokenError: If the signature is invalid or any claim fails.
     """
+    if audience is not None and audience != TOKEN_AUDIENCE:
+        raise ValueError("Expected JWT audience is server-controlled.")
+
     public_key_obj = _load_public_key(public_key_pem)
     claims = jwt.decode(
         token_str,
         public_key_obj,  # type: ignore[arg-type]
         algorithms=["EdDSA"],
-        audience=audience or TOKEN_AUDIENCE,
+        audience=TOKEN_AUDIENCE,
         issuer=TOKEN_ISSUER,
         options={"require": ["sub", "jti", "iat", "exp", "iss", "aud"]},
     )
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    if (
+        not _finite_number(issued_at)
+        or not _finite_number(expires_at)
+        or expires_at <= issued_at
+        or expires_at - issued_at > MAX_TOKEN_LIFETIME_SECONDS
+    ):
+        raise jwt.InvalidTokenError("Token lifetime claims are invalid or exceed policy.")
     return claims
 
 

@@ -72,6 +72,16 @@ button { color: inherit; }
 .icon-button:hover { border-color: var(--outline); background: var(--surface-raised); color: var(--text); }
 .menu-button { display: none; }
 
+/* ── Buttons ─────────────────────────────────────────────── */
+.button { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border: 1px solid transparent; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; letter-spacing: .01em; text-decoration: none; transition: background .18s ease, border-color .18s ease, color .18s ease, transform .12s ease; white-space: nowrap; }
+.button:hover { transform: translateY(-1px); }
+.button:active { transform: translateY(0); }
+.button-tonal { border-color: var(--outline); background: var(--surface-raised); color: var(--text-secondary); }
+.button-tonal:hover { background: var(--surface-high); color: var(--text); border-color: var(--primary); }
+.button-ghost { border-color: rgba(169, 199, 255, 0.25); background: rgba(169, 199, 255, 0.06); color: var(--primary); }
+.button-ghost:hover { border-color: var(--primary-strong); background: rgba(120, 169, 255, 0.15); color: #c8dcff; }
+.back-home-btn { font-size: 13px; }
+
 main { width: min(100%, 1580px); margin: 0 auto; padding: 36px clamp(22px, 4vw, 54px) 58px; }
 .page-section { display: none; animation: appear .2s ease both; }
 .page-section.active { display: block; }

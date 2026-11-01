@@ -12,6 +12,7 @@ Tests cover:
 import time
 import pytest
 import jwt as pyjwt
+from pathlib import Path
 
 from app.modules.tokens.jwt_engine import (
     generate_signing_keypair,
@@ -20,7 +21,11 @@ from app.modules.tokens.jwt_engine import (
     verify_token,
     decode_token_unverified,
 )
-from app.modules.tokens.models import TOKEN_ISSUER, TOKEN_AUDIENCE
+from app.modules.tokens.models import (
+    MAX_TOKEN_LIFETIME_SECONDS,
+    TOKEN_ISSUER,
+    TOKEN_AUDIENCE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -105,36 +110,161 @@ def test_token_contains_expected_claims(valid_token, keypair, sample_did):
 
 
 def test_issue_token_with_extra_claims(keypair, sample_did):
-    """Custom claims survive, but callers cannot replace issuance or policy claims."""
+    """Only allowlisted, non-authorization metadata can be added to a token."""
     private_pem, public_pem = keypair
     token_str, _ = issue_token(
         did=sample_did,
         scope=["read:profile"],
         private_key_pem=private_pem,
-        extra_claims={
-            "custom_field": "hello",
-            "sub": "attacker_overwrite",
-            "jti": "attacker-jti",
-            "iat": 1,
-            "exp": 2,
-            "iss": "attacker-issuer",
-            "aud": "attacker-audience",
-            "scope": ["root:admin:unrestricted"],
-            "did_status": "ACTIVE_UNVERIFIED",
-            "did_verified_at": "attacker-timestamp",
-        },
+        extra_claims={"trace_id": "request-123"},
     )
     claims = verify_token(token_str, public_pem)
-    assert claims["custom_field"] == "hello"
+    assert claims["trace_id"] == "request-123"
     assert claims["sub"] == sample_did
-    assert claims["jti"] != "attacker-jti"
-    assert claims["iat"] > 1
-    assert claims["exp"] > claims["iat"]
-    assert claims["iss"] == TOKEN_ISSUER
-    assert claims["aud"] == TOKEN_AUDIENCE
-    assert claims["scope"] == ["read:profile"]
-    assert claims["did_status"] == "ACTIVE"
-    assert claims["did_verified_at"] != "attacker-timestamp"
+
+
+@pytest.mark.parametrize(
+    ("claim", "value"),
+    [
+        ("scope", ["admin:ledger"]),
+        ("iss", "attacker-issuer"),
+        ("aud", "another-service"),
+        ("sub", "did:mesh:key:attacker"),
+        ("exp", 1),
+        ("iat", 1),
+        ("nbf", 9999999999),
+        ("jti", "attacker-jti"),
+        ("did", "did:mesh:key:attacker"),
+        ("did_status", "UNVERIFIED"),
+        ("did_verified_at", "attacker-value"),
+        ("did_verification_status", "VERIFIED"),
+        ("roles", ["admin"]),
+    ],
+)
+def test_issue_token_rejects_reserved_authorization_claims(
+    keypair, sample_did, claim, value
+):
+    private_pem, _ = keypair
+
+    with pytest.raises(ValueError, match="reserved claim"):
+        issue_token(
+            did=sample_did,
+            scope=["read:profile"],
+            private_key_pem=private_pem,
+            extra_claims={claim: value},
+        )
+
+
+def test_issue_token_rejects_unallowlisted_custom_claim(keypair, sample_did):
+    private_pem, _ = keypair
+
+    with pytest.raises(ValueError, match="not allowed"):
+        issue_token(
+            did=sample_did,
+            scope=["read:profile"],
+            private_key_pem=private_pem,
+            extra_claims={"custom_field": "unapproved"},
+        )
+
+
+def test_issue_token_rejects_caller_selected_audience(keypair, sample_did):
+    private_pem, _ = keypair
+
+    with pytest.raises(ValueError, match="server-controlled"):
+        issue_token(
+            did=sample_did,
+            scope=["read:profile"],
+            private_key_pem=private_pem,
+            audience="another-service",
+        )
+
+
+def test_issue_token_accepts_lifetime_longer_than_24_hours(keypair, sample_did):
+    private_pem, public_pem = keypair
+    token, _ = issue_token(
+        did=sample_did,
+        scope=["read:profile"],
+        private_key_pem=private_pem,
+        expiry_seconds=48 * 60 * 60,
+    )
+
+    claims = verify_token(token, public_pem)
+    assert claims["exp"] - claims["iat"] > 24 * 60 * 60
+
+
+def test_issue_token_rejects_lifetime_above_storage_policy(keypair, sample_did):
+    private_pem, _ = keypair
+    with pytest.raises(ValueError, match="Token lifetime"):
+        issue_token(
+            did=sample_did,
+            scope=["read:profile"],
+            private_key_pem=private_pem,
+            expiry_seconds=MAX_TOKEN_LIFETIME_SECONDS + 1,
+        )
+
+
+def test_verify_token_rejects_signed_lifetime_above_storage_policy(keypair, sample_did):
+    private_pem, public_pem = keypair
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "sub": sample_did,
+            "jti": "overlong-token",
+            "iat": now,
+            "exp": now + MAX_TOKEN_LIFETIME_SECONDS + 1,
+            "iss": TOKEN_ISSUER,
+            "aud": TOKEN_AUDIENCE,
+        },
+        private_pem,
+        algorithm="EdDSA",
+    )
+
+    with pytest.raises(pyjwt.InvalidTokenError, match="lifetime"):
+        verify_token(token, public_pem)
+
+
+def test_verify_token_rejects_unexpected_audience(keypair, sample_did):
+    private_pem, public_pem = keypair
+    now = int(time.time())
+    unexpected_token = pyjwt.encode(
+        {
+            "sub": sample_did,
+            "jti": "unexpected-audience-test",
+            "iat": now,
+            "exp": now + 60,
+            "iss": TOKEN_ISSUER,
+            "aud": "another-service",
+            "scope": ["read:profile"],
+        },
+        private_pem,
+        algorithm="EdDSA",
+    )
+
+    with pytest.raises(pyjwt.InvalidAudienceError):
+        verify_token(unexpected_token, public_pem)
+
+
+def test_verify_token_does_not_accept_caller_selected_expected_audience(keypair, sample_did):
+    private_pem, public_pem = keypair
+    token, _ = issue_token(
+        did=sample_did,
+        scope=["read:profile"],
+        private_key_pem=private_pem,
+    )
+
+    with pytest.raises(ValueError, match="server-controlled"):
+        verify_token(token, public_pem, audience="another-service")
+
+
+def test_ordinary_token_cannot_obtain_admin_scope(keypair, sample_did):
+    private_pem, _ = keypair
+
+    with pytest.raises(ValueError, match="not permitted"):
+        issue_token(
+            did=sample_did,
+            scope=["admin:ledger"],
+            private_key_pem=private_pem,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -210,49 +340,63 @@ def test_decode_token_unverified_returns_header_and_payload(valid_token):
 # ---------------------------------------------------------------------------
 
 
-def _write_key_files(directory, private_pem, public_pem):
+def _write_key_files(directory: Path, private_pem: bytes, public_pem: bytes) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "token_signing_private.pem").write_bytes(private_pem)
     (directory / "token_signing_public.pem").write_bytes(public_pem)
 
 
-@pytest.mark.parametrize("missing", ["both", "private", "public"])
-def test_key_loader_rejects_missing_files_without_creating_keys(tmp_path, missing):
-    key_dir = tmp_path / "missing-keys"
-    key_dir.mkdir()
-    private_pem, public_pem = generate_signing_keypair()
+def test_key_loader_rejects_missing_directory_without_creating_it(tmp_path):
+    key_dir = tmp_path / "not-provisioned"
 
-    if missing == "private":
-        (key_dir / "token_signing_public.pem").write_bytes(public_pem)
-    elif missing == "public":
-        (key_dir / "token_signing_private.pem").write_bytes(private_pem)
-
-    with pytest.raises(RuntimeError, match="(existing directory|file is missing)"):
+    with pytest.raises(RuntimeError, match="existing directory"):
         load_or_create_keys(key_dir)
 
-    expected_files = set()
+    assert not key_dir.exists()
+
+
+@pytest.mark.parametrize("missing", ["private", "public"])
+def test_key_loader_rejects_missing_file_without_overwriting_existing_file(
+    tmp_path, keypair, missing
+):
+    key_dir = tmp_path / "partial-pair"
+    key_dir.mkdir()
+    private_pem, public_pem = keypair
+
     if missing == "private":
-        expected_files.add("token_signing_public.pem")
-    elif missing == "public":
-        expected_files.add("token_signing_private.pem")
-    assert {path.name for path in key_dir.iterdir()} == expected_files
+        existing_path = key_dir / "token_signing_public.pem"
+        existing_contents = public_pem
+    else:
+        existing_path = key_dir / "token_signing_private.pem"
+        existing_contents = private_pem
+    existing_path.write_bytes(existing_contents)
+
+    with pytest.raises(RuntimeError, match="file is missing"):
+        load_or_create_keys(key_dir)
+
+    assert existing_path.read_bytes() == existing_contents
+    assert {path.name for path in key_dir.iterdir()} == {existing_path.name}
 
 
 @pytest.mark.parametrize("malformed", ["private", "public"])
-def test_key_loader_rejects_malformed_ed25519_keys(tmp_path, malformed):
-    key_dir = tmp_path / "malformed-keys"
-    private_pem, public_pem = generate_signing_keypair()
+def test_key_loader_rejects_malformed_pem_without_exposing_contents(
+    tmp_path, keypair, malformed
+):
+    key_dir = tmp_path / "malformed-pair"
+    private_pem, public_pem = keypair
     _write_key_files(key_dir, private_pem, public_pem)
     malformed_path = key_dir / f"token_signing_{malformed}.pem"
-    malformed_path.write_bytes(b"not a valid PEM key")
+    malformed_path.write_bytes(b"not a PEM key")
 
-    with pytest.raises(RuntimeError, match="not a valid PEM key"):
+    with pytest.raises(RuntimeError, match="not a valid PEM key") as error:
         load_or_create_keys(key_dir)
 
+    assert b"not a PEM key" not in str(error.value).encode()
 
-def test_key_loader_rejects_mismatched_ed25519_pair(tmp_path):
-    key_dir = tmp_path / "mismatched-keys"
-    private_pem, _ = generate_signing_keypair()
+
+def test_key_loader_rejects_mismatched_ed25519_pair(tmp_path, keypair):
+    key_dir = tmp_path / "mismatched-pair"
+    private_pem, _ = keypair
     _, unrelated_public_pem = generate_signing_keypair()
     _write_key_files(key_dir, private_pem, unrelated_public_pem)
 
@@ -260,18 +404,14 @@ def test_key_loader_rejects_mismatched_ed25519_pair(tmp_path):
         load_or_create_keys(key_dir)
 
 
-def test_key_loader_loads_and_uses_valid_ed25519_pair(tmp_path):
-    key_dir = tmp_path / "valid-keys"
-    private_pem, public_pem = generate_signing_keypair()
+def test_key_loader_accepts_existing_matching_pair_without_modification(tmp_path, keypair):
+    key_dir = tmp_path / "valid-pair"
+    private_pem, public_pem = keypair
     _write_key_files(key_dir, private_pem, public_pem)
 
     loaded_private_pem, loaded_public_pem = load_or_create_keys(key_dir)
-    token, _ = issue_token(
-        did="did:mesh:key:z6MkuLoadedKeyTest",
-        scope=["read:profile"],
-        private_key_pem=loaded_private_pem,
-    )
 
-    claims = verify_token(token, loaded_public_pem)
-    assert claims["sub"] == "did:mesh:key:z6MkuLoadedKeyTest"
-    assert claims["scope"] == ["read:profile"]
+    assert loaded_private_pem == private_pem
+    assert loaded_public_pem == public_pem
+    assert (key_dir / "token_signing_private.pem").read_bytes() == private_pem
+    assert (key_dir / "token_signing_public.pem").read_bytes() == public_pem

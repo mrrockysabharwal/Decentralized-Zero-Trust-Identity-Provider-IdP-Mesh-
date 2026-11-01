@@ -4,8 +4,9 @@ All models follow strict validation to prevent malformed data from entering the
 token issuance or verification pipeline.
 """
 
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Callable, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi import HTTPException, Header, status
 
 
 # ---------------------------------------------------------------------------
@@ -15,12 +16,62 @@ from pydantic import BaseModel, Field, field_validator
 ALLOWED_SCOPES: List[str] = [
     "read:profile",
     "write:did",
-    "admin:ledger",
     "auth:webauthn",
 ]
 
+# These claims are assigned by trusted token-issuance code and can never be
+# provided through the custom-claims extension point.
+RESERVED_TOKEN_CLAIMS = frozenset(
+    {
+        "iss",
+        "sub",
+        "aud",
+        "exp",
+        "nbf",
+        "iat",
+        "jti",
+        "scope",
+        "scp",
+        "did",
+        "did_status",
+        "did_verified_at",
+        "did_verification_status",
+        "role",
+        "roles",
+        "permissions",
+        "groups",
+        "is_admin",
+        "admin",
+        "auth_time",
+        "acr",
+        "amr",
+        "tenant",
+        "client_id",
+    }
+)
+
+# Only informational correlation metadata is accepted as a custom claim.
+ALLOWED_EXTRA_TOKEN_CLAIMS = frozenset({"trace_id"})
+
+
+def validate_extra_token_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
+    """Accept only allowlisted non-authorization metadata claims."""
+    for name, value in claims.items():
+        if name in RESERVED_TOKEN_CLAIMS:
+            raise ValueError(f"extra_claims cannot set reserved claim '{name}'.")
+        if name not in ALLOWED_EXTRA_TOKEN_CLAIMS:
+            raise ValueError(f"Custom token claim '{name}' is not allowed.")
+        if not isinstance(value, str) or not value or len(value) > 128:
+            raise ValueError(
+                "The trace_id custom claim must be a non-empty string of at most 128 characters."
+            )
+    return dict(claims)
+
 # Default token lifetime in seconds (1 hour)
 DEFAULT_TOKEN_EXPIRY_SECONDS: int = 3600
+# Maximum ordinary-token lifetime. Revocation records are retained for at least
+# the target token's remaining lifetime, so storage TTLs share this bound.
+MAX_TOKEN_LIFETIME_SECONDS: int = 30 * 24 * 60 * 60
 
 # JWT issuer and audience identifiers
 TOKEN_ISSUER: str = "idp-mesh-v1"
@@ -33,7 +84,9 @@ TOKEN_AUDIENCE: str = "idp-mesh-api"
 
 
 class TokenIssueRequest(BaseModel):
-    """Request a token for a DID subject; this payload does not authenticate the caller."""
+    """Payload to request a new JWT access token for an authenticated DID."""
+
+    model_config = ConfigDict(extra="forbid")
 
     did: str = Field(
         min_length=3,
@@ -43,13 +96,18 @@ class TokenIssueRequest(BaseModel):
         default_factory=lambda: ["read:profile"],
         description="List of requested permission scopes",
     )
-    audience: Optional[str] = Field(
-        default=None,
-        description="Optional JWT audience override (defaults to 'idp-mesh-api')",
-    )
     extra_claims: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Optional additional claims to embed in the token payload",
+        description="Allowlisted informational claims only (currently trace_id)",
+    )
+    require_webauthn: bool = Field(
+        default=False,
+        description=(
+            "If True, the Zero-Trust policy engine will enforce Check 5: "
+            "the DID must have at least one registered WebAuthn credential before "
+            "a token is issued. Set to True for production flows that follow the "
+            "full DID → WebAuthn → Token ceremony."
+        ),
     )
 
     @field_validator("scope")
@@ -58,7 +116,15 @@ class TokenIssueRequest(BaseModel):
         """Ensure at least one scope is requested."""
         if not v:
             raise ValueError("scope must contain at least one entry")
+        invalid = [scope for scope in v if scope not in ALLOWED_SCOPES]
+        if invalid:
+            raise ValueError(f"scope contains values not permitted for ordinary tokens: {invalid}")
         return v
+
+    @field_validator("extra_claims")
+    @classmethod
+    def validate_extra_claims_field(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        return validate_extra_token_claims(v)
 
 
 class TokenVerifyRequest(BaseModel):

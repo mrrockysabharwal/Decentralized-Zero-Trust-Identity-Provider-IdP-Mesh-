@@ -2,9 +2,9 @@
 
 Endpoints (all mounted under /api/v1/tokens by Member 1's main.py):
 
-  POST   /tokens/issue          - Returns HTTP 503 until verified caller authentication is integrated
+  POST   /tokens/issue          — Unavailable until caller authorization is implemented
   POST   /tokens/verify         — Verify & decode a JWT
-  POST   /tokens/revoke         - Returns HTTP 503 until token ownership authorization is integrated
+  POST   /tokens/revoke         — Unavailable until token ownership authorization is implemented
   GET    /tokens/public-key     — Return the current Ed25519 signing public key
   GET    /tokens/policy/scopes  — Return the list of policy-allowed scopes
 
@@ -29,13 +29,12 @@ from app.modules.tokens.models import (
     TOKEN_ISSUER,
     AllowedScopesResponse,
     PublicKeyResponse,
-    TokenIssueRequest,
-    TokenRevokeRequest,
     TokenVerifyRequest,
     TokenVerifyResponse,
 )
 from app.modules.tokens.policy import ZeroTrustPolicyEngine
-from app.modules.tokens.revocation import TokenRevocationStore
+from app.modules.tokens.revocation import RevocationStoreError
+from app.modules.revocation_provider import get_revocation_store
 
 # ---------------------------------------------------------------------------
 # Router
@@ -50,7 +49,9 @@ router = APIRouter(prefix="/tokens", tags=["JWT Tokens & Zero-Trust Policy"])
 # Signing keys must be provisioned outside the repository before importing the app.
 _configured_key_dir = os.environ.get("TOKEN_KEY_DIR")
 if not _configured_key_dir or not _configured_key_dir.strip():
-    raise RuntimeError("TOKEN_KEY_DIR must be explicitly set to an external signing-key directory.")
+    raise RuntimeError(
+        "TOKEN_KEY_DIR must be explicitly set to an external signing-key directory."
+    )
 
 _KEY_DIR_PATH = Path(_configured_key_dir).expanduser().resolve()
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -73,12 +74,6 @@ _shared_ledger = SimulatedLedger(auto_genesis=True)
 # Policy engine backed by the shared ledger
 _policy_engine = ZeroTrustPolicyEngine(ledger=_shared_ledger)
 
-# Revocation store (Redis or in-memory fallback)
-_revocation_store = TokenRevocationStore(
-    redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-)
-
-
 # ---------------------------------------------------------------------------
 # Dependency helpers (replaceable in tests via module-level reassignment)
 # ---------------------------------------------------------------------------
@@ -100,10 +95,6 @@ def get_policy_engine() -> ZeroTrustPolicyEngine:
     return _policy_engine
 
 
-def get_revocation_store() -> TokenRevocationStore:
-    return _revocation_store
-
-
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -113,18 +104,16 @@ def get_revocation_store() -> TokenRevocationStore:
     "/issue",
     response_model=None,
     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-    summary="Unavailable until authenticated DID verification is integrated",
+    summary="Unavailable until authenticated caller authorization is implemented",
 )
-def issue_access_token(payload: TokenIssueRequest) -> None:
-    """Reject token issuance until a verified caller identity is available.
+def issue_access_token() -> None:
+    """Keep issuance unavailable until caller identity and permission checks exist.
 
-    Ledger registration and scope policy do not prove that the caller controls
-    the requested DID. Issuance stays unavailable until authentication can
-    supply a verified DID principal.
+    The request body's DID and scopes are not proof of identity or authority.
     """
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Token issuance is unavailable until authenticated DID verification is integrated.",
+        detail="Token issuance is unavailable until authenticated caller authorization is implemented.",
     )
 
 
@@ -151,7 +140,20 @@ def verify_access_token(payload: TokenVerifyRequest) -> TokenVerifyResponse:
 
     # Step 2: Check revocation deny-list
     jti = claims.get("jti", "")
-    if revocation_store.is_revoked(jti):
+    try:
+        is_revoked = revocation_store.is_revoked(jti)
+    except ValueError:
+        return TokenVerifyResponse(
+            valid=False,
+            error="Token contains an invalid revocation identifier.",
+        )
+    except RevocationStoreError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Token revocation status is unavailable.",
+        ) from None
+
+    if is_revoked:
         return TokenVerifyResponse(
             valid=False,
             error=f"Token (jti={jti}) has been explicitly revoked.",
@@ -164,17 +166,16 @@ def verify_access_token(payload: TokenVerifyRequest) -> TokenVerifyResponse:
     "/revoke",
     response_model=None,
     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-    summary="Unavailable until authenticated token ownership is integrated",
+    summary="Unavailable until token ownership authorization is implemented",
 )
-def revoke_access_token(payload: TokenRevokeRequest) -> None:
-    """Reject revocation until a verified caller identity is available.
-
-    A JTI alone carries no proof of ownership, and this service currently has
-    no authenticated principal with which to authorize revocation.
-    """
+def revoke_access_token() -> None:
+    """Keep revocation unavailable until the caller is authorized for the JTI."""
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Token revocation is unavailable until authenticated token ownership is integrated.",
+        detail=(
+            "Token revocation is unavailable until authenticated token ownership "
+            "authorization is implemented."
+        ),
     )
 
 

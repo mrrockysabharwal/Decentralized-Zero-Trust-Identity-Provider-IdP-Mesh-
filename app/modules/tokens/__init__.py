@@ -40,7 +40,19 @@ from app.modules.tokens.jwt_engine import (
 )
 from app.modules.tokens.revocation import TokenRevocationStore
 from app.modules.tokens.policy import ZeroTrustPolicyEngine
-from app.modules.tokens.router import router as tokens_router
+
+
+def __getattr__(name: str):
+    """Load the HTTP router only when callers explicitly request it.
+
+    Importing token models, policy, JWT helpers, or revocation storage must not
+    initialize externally provisioned signing keys as a side effect.
+    """
+    if name == "tokens_router":
+        from app.modules.tokens.router import router
+
+        return router
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     # Models

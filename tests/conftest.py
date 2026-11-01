@@ -54,6 +54,7 @@ import app.modules.ledger.router as ledger_router_module
 from app.modules.tokens.jwt_engine import generate_signing_keypair
 from app.modules.tokens.policy import ZeroTrustPolicyEngine
 from app.modules.tokens.revocation import TokenRevocationStore
+import app.modules.revocation_provider as revocation_provider
 from app.modules.tokens import tokens_router
 import app.modules.tokens.router as tokens_router_module
 
@@ -81,7 +82,7 @@ def isolated_mesh_app():
     orig_pub = tokens_router_module._public_key_pem
     orig_ledger = tokens_router_module._shared_ledger
     orig_policy = tokens_router_module._policy_engine
-    orig_rev = tokens_router_module._revocation_store
+    orig_rev = revocation_provider._revocation_store
 
     # Reset ledger
     with ledger_instance._lock:
@@ -90,14 +91,17 @@ def isolated_mesh_app():
 
     priv_pem, pub_pem = generate_signing_keypair()
     shared_policy = ZeroTrustPolicyEngine(ledger=ledger_instance)
-    rev_store = TokenRevocationStore(redis_url="redis://localhost:0/99")
+    rev_store = TokenRevocationStore(
+        redis_url="redis://localhost:0/99",
+        allow_in_memory_fallback=True,
+    )
     rev_store.clear_in_memory()
 
     tokens_router_module._private_key_pem = priv_pem
     tokens_router_module._public_key_pem = pub_pem
     tokens_router_module._shared_ledger = ledger_instance
     tokens_router_module._policy_engine = shared_policy
-    tokens_router_module._revocation_store = rev_store
+    revocation_provider.set_revocation_store(rev_store)
 
     app.include_router(ledger_router, prefix="/api/v1")
     app.include_router(tokens_router, prefix="/api/v1")
@@ -113,7 +117,7 @@ def isolated_mesh_app():
     tokens_router_module._public_key_pem = orig_pub
     tokens_router_module._shared_ledger = orig_ledger
     tokens_router_module._policy_engine = orig_policy
-    tokens_router_module._revocation_store = orig_rev
+    revocation_provider.set_revocation_store(orig_rev)
 
 
 @pytest.fixture

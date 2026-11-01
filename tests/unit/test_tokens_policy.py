@@ -186,6 +186,19 @@ def test_policy_denies_if_any_scope_invalid(active_ledger):
     assert result.allowed is False
 
 
+def test_policy_denies_admin_scope_even_if_custom_allowlist_contains_it(active_ledger):
+    """Ordinary token policy must never grant scopes reserved for admin JWTs."""
+    engine = ZeroTrustPolicyEngine(
+        ledger=active_ledger,
+        allowed_scopes=["read:profile", "admin:ledger"],
+    )
+
+    result = engine.evaluate(did=ACTIVE_DID, requested_scope=["admin:ledger"])
+
+    assert result.allowed is False
+    assert "admin:ledger" not in engine.get_allowed_scopes()
+
+
 # ---------------------------------------------------------------------------
 # Test: Reason string always populated
 # ---------------------------------------------------------------------------

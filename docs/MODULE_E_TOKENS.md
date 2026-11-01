@@ -12,7 +12,7 @@ The **JWT Access Token & Zero-Trust Policy Engine** provides JWT and policy comp
 
 1. **Provides JWT signing components** for DID-bound claims; HTTP issuance is unavailable pending verified caller authentication.
 2. **Provides Zero-Trust policy checks** for DID registration, status, ledger integrity, and allowed scopes; these checks do not authenticate callers.
-3. **Provides JTI deny-list storage** via Redis or an in-memory fallback; the HTTP revocation operation remains disabled pending ownership checks.
+3. **Provides JTI deny-list storage** via Redis, with an explicitly enabled bounded in-memory development fallback; admin authentication requires durable Redis.
 4. **Exposes FastAPI routes** for integration; HTTP issuance and revocation remain disabled pending authentication and ownership authorization.
 
 > **Zero-Trust principle**: Never implicit trust. The policy engine checks current ledger state for a DID and requested scopes; this does not establish who controls the DID.
@@ -36,8 +36,11 @@ app/modules/tokens/
 ├── models.py          — Pydantic request/response schemas & constants
 ├── jwt_engine.py      — Ed25519 JWT sign / verify / decode
 ├── policy.py          — Zero-Trust policy evaluation engine
-├── revocation.py      — Redis-backed JTI deny-list (in-memory fallback)
+├── revocation.py      — Redis-backed JTI deny-list (explicit development fallback)
 └── router.py          — FastAPI router (5 endpoints)
+
+app/modules/revocation_provider.py — lazy shared Redis/in-memory provider used by
+                                      both token verification and admin auth
 ```
 
 ---
@@ -224,4 +227,15 @@ pytest tests/unit/test_tokens_jwt_engine.py tests/unit/test_tokens_policy.py tes
 Pytest prints the collected test results and final summary. The test count can
 change as the suite evolves; use the summary from the run you perform.
 
-> **Note**: Tests do **not** require a running Redis server. The revocation store falls back to an in-memory backend automatically.
+> **Note**: Tests opt into the bounded in-memory backend explicitly. The application does not enable it automatically, and it cannot authorize admin requests.
+
+Ordinary token lifetimes are limited to 30 days at both creation and verification.
+Admin force-revocation verifies the signed target token and retains its JTI for
+the token's full remaining lifetime; admin JWTs retain their separate 24-hour
+maximum.
+
+The admin security dependency imports the neutral revocation provider rather
+than the ordinary token router. The token router uses the same provider, so both
+authentication paths query one revocation state. Importing admin security does
+not load ordinary signing keys. Ordinary token issuance and revocation HTTP
+routes remain unavailable with HTTP 503.

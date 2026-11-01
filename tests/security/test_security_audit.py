@@ -25,7 +25,9 @@ from app.modules.tokens import (
 )
 import app.modules.ledger.router as ledger_router_module
 import app.modules.tokens.router as tokens_router_module
+import app.modules.revocation_provider as revocation_provider
 from app.modules.tokens.jwt_engine import generate_signing_keypair, issue_token, verify_token
+from tests.anchor_helpers import anchor_owned_did, create_owned_did
 
 
 @pytest.fixture
@@ -45,7 +47,10 @@ def security_test_env():
     other_priv_pem, other_pub_pem = generate_signing_keypair()
 
     policy = ZeroTrustPolicyEngine(ledger=ledger)
-    revocation = TokenRevocationStore(redis_url="redis://localhost:0/99")
+    revocation = TokenRevocationStore(
+        redis_url="redis://localhost:0/99",
+        allow_in_memory_fallback=True,
+    )
     revocation.clear_in_memory()
 
     # Save original token router dependencies
@@ -53,25 +58,23 @@ def security_test_env():
     orig_pub = tokens_router_module._public_key_pem
     orig_ledger = tokens_router_module._shared_ledger
     orig_policy = tokens_router_module._policy_engine
-    orig_rev = tokens_router_module._revocation_store
+    orig_rev = revocation_provider._revocation_store
     orig_get_priv = tokens_router_module.get_private_key
     orig_get_pub = tokens_router_module.get_public_key
     orig_get_ledger = tokens_router_module.get_ledger
     orig_get_policy = tokens_router_module.get_policy_engine
-    orig_get_rev = tokens_router_module.get_revocation_store
 
     # Patch singletons
     tokens_router_module._private_key_pem = private_pem
     tokens_router_module._public_key_pem = public_pem
     tokens_router_module._shared_ledger = ledger
     tokens_router_module._policy_engine = policy
-    tokens_router_module._revocation_store = revocation
+    revocation_provider.set_revocation_store(revocation)
 
     tokens_router_module.get_private_key = lambda: private_pem
     tokens_router_module.get_public_key = lambda: public_pem
     tokens_router_module.get_ledger = lambda: ledger
     tokens_router_module.get_policy_engine = lambda: policy
-    tokens_router_module.get_revocation_store = lambda: revocation
 
     app.include_router(ledger_router, prefix="/api/v1")
     app.include_router(tokens_router, prefix="/api/v1")
@@ -95,12 +98,11 @@ def security_test_env():
     tokens_router_module._public_key_pem = orig_pub
     tokens_router_module._shared_ledger = orig_ledger
     tokens_router_module._policy_engine = orig_policy
-    tokens_router_module._revocation_store = orig_rev
+    revocation_provider.set_revocation_store(orig_rev)
     tokens_router_module.get_private_key = orig_get_priv
     tokens_router_module.get_public_key = orig_get_pub
     tokens_router_module.get_ledger = orig_get_ledger
     tokens_router_module.get_policy_engine = orig_get_policy
-    tokens_router_module.get_revocation_store = orig_get_rev
 
 
 class TestSecurityInvariants:
@@ -180,58 +182,41 @@ class TestSecurityInvariants:
         assert data["valid"] is False
         assert "expired" in data["error"].lower()
 
-    def test_unauthenticated_issue_fails_closed_with_scope_escalation_payload(
-        self, security_test_env
-    ):
-        """Unauthenticated issuance attempts fail closed, including scope escalation."""
+    def test_token_issuance_fails_closed_regardless_of_requested_scope(self, security_test_env):
+        """No body-supplied DID or scope can authorize issuance without a caller principal."""
         client = security_test_env["client"]
-        active_did = "did:mesh:key:z6MkuScopeTest"
+        active_did, owner_key = create_owned_did()
         doc_hash = hash_did_document({"id": active_did})
 
         # Anchor DID
-        anchor_resp = client.post(
-            "/api/v1/ledger/anchor",
-            json={"did": active_did, "doc_hash": doc_hash, "operation": "CREATE"},
-        )
+        anchor_resp = anchor_owned_did(client, active_did, owner_key, doc_hash)
         assert anchor_resp.status_code == 201
 
-        # Attempt to issue with unauthorized scope
+        # A registered DID and either ordinary or escalation scope do not authenticate
+        # the caller. The route must not reach policy evaluation or token signing.
         resp = client.post(
             "/api/v1/tokens/issue",
-            json={"did": active_did, "scope": ["read:profile", "root:admin:unrestricted"]},
+            json={
+                "did": active_did,
+                "scope": ["read:profile", "root:admin:unrestricted"],
+            },
         )
         assert resp.status_code == 503
-        assert "authenticated did" in resp.json()["detail"].lower()
+        assert "authenticated caller authorization" in resp.json()["detail"].lower()
 
-    def test_unauthenticated_caller_cannot_issue_or_revoke_another_dids_token(
+    def test_token_revocation_fails_closed_without_mutating_revocation_store(
         self, security_test_env
     ):
-        """Cross-identity issue and revoke requests cannot mutate token state."""
+        """An arbitrary JTI supplied by an anonymous caller cannot revoke a token."""
         client = security_test_env["client"]
-        other_did = "did:mesh:key:z6MkuOtherIdentitySecurityTest"
-        doc_hash = hash_did_document({"id": other_did})
-        anchor_resp = client.post(
-            "/api/v1/ledger/anchor",
-            json={"did": other_did, "doc_hash": doc_hash, "operation": "CREATE"},
-        )
-        assert anchor_resp.status_code == 201
+        revocation = security_test_env["revocation"]
+        jti = "another-identities-jti-security-test"
 
-        issue_resp = client.post(
-            "/api/v1/tokens/issue",
-            json={"did": other_did, "scope": ["read:profile"]},
-        )
-        assert issue_resp.status_code == 503
-
-        # Mint a test token locally to provide a real JTI belonging to the
-        # other DID; the unauthenticated HTTP request still cannot revoke it.
-        _token, other_jti = issue_token(
-            did=other_did,
-            scope=["read:profile"],
-            private_key_pem=security_test_env["private_pem"],
-        )
-        revoke_resp = client.post(
+        resp = client.post(
             "/api/v1/tokens/revoke",
-            json={"jti": other_jti, "reason": "cross-identity attempt"},
+            json={"jti": jti, "reason": "unauthorized request"},
         )
-        assert revoke_resp.status_code == 503
-        assert security_test_env["revocation"].is_revoked(other_jti) is False
+
+        assert resp.status_code == 503
+        assert "authenticated token ownership authorization" in resp.json()["detail"].lower()
+        assert revocation.is_revoked(jti) is False
