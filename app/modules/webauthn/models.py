@@ -154,6 +154,8 @@ class AuthenticationCompleteResponse(BaseModel):
     did: str = Field(description="Authenticated DID.")
     credential_id: str = Field(description="Credential used for authentication.")
     message: str = Field(description="Human-readable result message.")
+    session_token: str = Field(default="", description="Short-lived opaque bearer session for token issuance.")
+    session_expires_in: int = Field(default=0, description="Session lifetime in seconds.")
 
 
 # ---------------------------------------------------------------------------

@@ -36,7 +36,8 @@ import base64
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from app.modules.admin.authorization import require_admin
 
 from app.modules.admin.models import (
     CredentialAdminSummary,
@@ -49,7 +50,11 @@ from app.modules.admin.models import (
     SubsystemHealth,
     SystemHealthResponse,
     TokenPolicyInfo,
+    SecurityEvent,
+    SecurityEventPage,
 )
+from app.modules.audit.event_store import audit_event_store
+from app.modules.audit.event_store import record_security_event
 from app.modules.ledger.chain import SimulatedLedger
 from app.modules.ledger.models import LedgerOperation
 from app.modules.tokens.models import (
@@ -67,7 +72,7 @@ logger = logging.getLogger("idp_mesh.admin.router")
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/admin", tags=["Admin Dashboard"])
+router = APIRouter(prefix="/admin", tags=["Admin Dashboard"], dependencies=[Depends(require_admin)])
 
 # ---------------------------------------------------------------------------
 # Module-level singletons — injected by Member 1's main.py at startup.
@@ -205,6 +210,8 @@ def get_dashboard_summary() -> DashboardSummary:
         ),
     ]
 
+    _, event_total = audit_event_store.list_events(page=1, page_size=1)
+    event_counts = audit_event_store.counts()
     return DashboardSummary(
         total_dids=len(unique_dids),
         active_dids=active_count,
@@ -214,8 +221,36 @@ def get_dashboard_summary() -> DashboardSummary:
         ledger_head_hash=head.record_hash if head else None,
         total_credentials=total_creds,
         revocation_backend=rev_store.backend_type,
+        security_events_total=event_total,
+        authentication_attempts=event_counts.get("authentication:success", 0) + event_counts.get("authentication:failure", 0),
+        authentication_successes=event_counts.get("authentication:success", 0),
+        authentication_failures=event_counts.get("authentication:failure", 0),
+        access_allowed=event_counts.get("policy_decision:allow", 0),
+        access_denied=event_counts.get("policy_decision:deny", 0),
+        tokens_revoked=event_counts.get("token_revocation:success", 0),
         subsystems=subsystems,
     )
+
+
+@router.get("/events", response_model=SecurityEventPage, summary="List recent security events")
+def list_security_events(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    event_type: Optional[str] = None,
+    outcome: Optional[str] = None,
+) -> SecurityEventPage:
+    events, total = audit_event_store.list_events(
+        page=page, page_size=page_size, event_type=event_type, outcome=outcome
+    )
+    return SecurityEventPage(total=total, page=page, page_size=page_size, events=events)
+
+
+@router.get("/events/{event_id}", response_model=SecurityEvent, summary="Get security event details")
+def get_security_event(event_id: str) -> SecurityEvent:
+    event = audit_event_store.get_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Security event not found.")
+    return SecurityEvent(**event)
 
 
 @router.get(
@@ -397,6 +432,8 @@ def force_revoke_token(
 
     reason = (payload.reason if payload and payload.reason else "Admin force-revocation")
     rev_store.revoke(jti=jti, ttl_seconds=DEFAULT_TOKEN_EXPIRY_SECONDS)
+    record_security_event(event_type="token_revocation", outcome="success", severity="high",
+                          reason="administrator_revoked_token")
 
     logger.warning("ADMIN REVOCATION: jti=%s reason=%s", jti, reason)
 
@@ -482,6 +519,8 @@ def simulate_ledger_tamper(
         is_valid,
         error,
     )
+    record_security_event(event_type="ledger_integrity", outcome="failure", severity="critical",
+                          reason="tamper_simulation_executed")
 
     return LedgerAdminView(
         total_records=len(all_records),

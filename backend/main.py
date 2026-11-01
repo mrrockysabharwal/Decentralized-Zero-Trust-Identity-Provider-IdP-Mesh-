@@ -788,6 +788,9 @@ def registration_verify(body: RegistrationVerifyRequest):
 
     document_hash = sync_did_document(username, did)
     sync_user_credentials_to_core(username)
+    from app.modules.audit.event_store import record_security_event
+    record_security_event(event_type="credential_registration", outcome="success", severity="low",
+                          did=did, reason="native_webauthn_credential_registered")
 
     return {
         "verified": True,
@@ -878,6 +881,9 @@ def authentication_verify(body: AuthenticationVerifyRequest):
             require_user_verification=True,
         )
     except Exception as exc:
+        from app.modules.audit.event_store import record_security_event
+        record_security_event(event_type="authentication", outcome="failure", severity="medium",
+                              reason="native_webauthn_assertion_failed")
         raise HTTPException(
             status_code=401,
             detail="Authentication failed. Please try again.",
@@ -900,23 +906,30 @@ def authentication_verify(body: AuthenticationVerifyRequest):
     did = user["did"] or ensure_user_did(username)
     sync_user_credentials_to_core(username)
 
-    # A successful native passkey ceremony now issues the same JWT used by
-    # Midhun's token and zero-trust policy modules.
+    # Bridge verified browser WebAuthn to the core DID-bound auth session.
+    from app.modules.webauthn.session_store import auth_session_store
     from app.modules.tokens.models import TokenIssueRequest
     from app.modules.tokens.router import issue_access_token
 
+    session_token, session_ttl = auth_session_store.create(did)
     access_token = issue_access_token(
         TokenIssueRequest(
             did=did,
             scope=["read:profile"],
             require_webauthn=True,
-        )
+        ),
+        authorization=f"Bearer {session_token}",
     )
+    from app.modules.audit.event_store import record_security_event
+    record_security_event(event_type="authentication", outcome="success", severity="low",
+                          did=did, reason="native_webauthn_assertion_verified")
 
     return {
         "authenticated": True,
         "username": username,
         "did": did,
+        "session_token": session_token,
+        "session_expires_in": session_ttl,
         "access_token": access_token.access_token,
         "token_type": access_token.token_type,
         "expires_in": access_token.expires_in,

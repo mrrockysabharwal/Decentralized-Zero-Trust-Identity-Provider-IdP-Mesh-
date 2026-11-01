@@ -2,7 +2,7 @@
 
 const API_BASE = window.location.origin.includes(':8000') ? '/api/v1' : 'http://localhost:8000/api/v1';
 const REFRESH_INTERVAL = 30000;
-const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, busy: false, noticeDismissed: false };
+const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, events: null, eventSummary: null, adminToken: sessionStorage.getItem('idp_access_token') || '', busy: false, noticeDismissed: false };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -21,7 +21,7 @@ async function request(path, options = {}) {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
-      headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) }
+      headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(state.adminToken ? { Authorization: `Bearer ${state.adminToken}` } : {}), ...(options.headers || {}) }
     });
     const type = response.headers.get('content-type') || '';
     const payload = type.includes('application/json') ? await response.json() : null;
@@ -186,14 +186,76 @@ async function refreshAll() {
   state.publicKey = results[2].status === 'fulfilled' ? results[2].value : null;
   state.scopes = results[3].status === 'fulfilled' && Array.isArray(results[3].value?.scopes) ? results[3].value.scopes : null;
   state.health = results[4].status === 'fulfilled' ? results[4].value : null;
+  if (state.adminToken) {
+    const [summary, events] = await Promise.allSettled([
+      request('/admin/dashboard'), loadEvents()
+    ]);
+    state.eventSummary = summary.status === 'fulfilled' ? summary.value : null;
+    state.events = events.status === 'fulfilled' ? events.value : null;
+  } else {
+    state.eventSummary = null;
+    state.events = null;
+  }
   const live = results.some(result => result.status === 'fulfilled');
   const firstError = results.find(result => result.status === 'rejected')?.reason;
   setConnection(live, firstError?.name === 'AbortError' ? 'The API request timed out. Check that the backend is running.' : (firstError?.message || 'Could not reach the FastAPI service.'));
-  renderMetrics(); renderRecentLedger(); renderLedger(); renderIdentities(); renderTokenInfo(); renderHealth();
+  renderMetrics(); renderRecentLedger(); renderLedger(); renderIdentities(); renderTokenInfo(); renderHealth(); renderSecurityEvents();
   $('#last-updated').textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date())}`;
   state.busy = false;
   $('#refresh-button').disabled = false;
   $('#refresh-button').classList.remove('is-loading');
+}
+
+async function loadEvents() {
+  const params = new URLSearchParams({ page: '1', page_size: '50' });
+  const type = $('#event-type-filter')?.value;
+  const outcome = $('#event-outcome-filter')?.value;
+  if (type) params.set('event_type', type);
+  if (outcome) params.set('outcome', outcome);
+  return request(`/admin/events?${params.toString()}`);
+}
+
+function renderSecurityEvents() {
+  const summary = state.eventSummary;
+  $('#event-total').textContent = summary ? String(summary.security_events_total) : '—';
+  $('#auth-attempt-count').textContent = summary ? String(summary.authentication_attempts) : '—';
+  $('#auth-success-count').textContent = summary ? String(summary.authentication_successes) : '—';
+  $('#auth-failure-count').textContent = summary ? String(summary.authentication_failures) : '—';
+  $('#access-denied-count').textContent = summary ? String(summary.access_denied) : '—';
+  const body = $('#security-events-body');
+  if (!state.adminToken) {
+    $('#event-count').textContent = 'Administrator token required';
+    body.innerHTML = '<tr><td colspan="6">Connect with an administrator token to load the audit feed.</td></tr>';
+    return;
+  }
+  if (!state.events) {
+    $('#event-count').textContent = 'Events unavailable';
+    body.innerHTML = '<tr><td colspan="6">Could not load events. Check the token role and API connection.</td></tr>';
+    return;
+  }
+  $('#event-count').textContent = `${state.events.total} matching event${state.events.total === 1 ? '' : 's'}`;
+  if (!state.events.events.length) {
+    body.innerHTML = '<tr><td colspan="6">No matching events yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = state.events.events.map(event => {
+    const details = escapeHtml(JSON.stringify({ correlation_id: event.correlation_id, metadata: event.metadata }, null, 2));
+    return `<tr><td>${formatDate(event.timestamp)}</td><td>${escapeHtml(event.event_type)}</td><td>${escapeHtml(event.outcome)}</td><td>${escapeHtml(event.severity)}</td><td class="mono">${escapeHtml(event.did_ref || '—')}</td><td>${escapeHtml(event.reason)}<details><summary>Details</summary><pre>${details}</pre></details></td></tr>`;
+  }).join('');
+}
+
+async function refreshEvents() {
+  if (!state.adminToken) { renderSecurityEvents(); return; }
+  try {
+    const [summary, events] = await Promise.all([request('/admin/dashboard'), loadEvents()]);
+    state.eventSummary = summary;
+    state.events = events;
+  } catch (error) {
+    state.eventSummary = null;
+    state.events = null;
+    showToast(`Event feed unavailable: ${error.message}`, 'warning');
+  }
+  renderSecurityEvents();
 }
 
 function showToast(message, type = 'info') {
@@ -256,11 +318,28 @@ async function simulateTamper(event) {
 }
 
 function bindEvents() {
+  $('#admin-token').value = state.adminToken;
   $$('.nav-link').forEach(link => link.addEventListener('click', () => navigate(link.dataset.section)));
   window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
   $('#refresh-button').addEventListener('click', refreshAll);
   $('#audit-button').addEventListener('click', async () => { await refreshAll(); showToast(state.audit ? 'Integrity audit refreshed.' : 'Integrity audit is unavailable.', state.audit?.valid ? 'success' : 'warning'); });
   $('#health-refresh-button').addEventListener('click', refreshAll);
+  $('#admin-token-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    state.adminToken = $('#admin-token').value.trim();
+    sessionStorage.setItem('idp_access_token', state.adminToken);
+    await refreshEvents();
+  });
+  $('#clear-admin-token').addEventListener('click', () => {
+    state.adminToken = '';
+    sessionStorage.removeItem('idp_access_token');
+    sessionStorage.removeItem('idp_authenticated_did');
+    $('#admin-token').value = '';
+    renderSecurityEvents();
+  });
+  $('#events-refresh-button').addEventListener('click', refreshEvents);
+  $('#event-type-filter').addEventListener('change', refreshEvents);
+  $('#event-outcome-filter').addEventListener('change', refreshEvents);
   $('#identity-search').addEventListener('input', renderIdentities);
   $('#export-ledger-button').addEventListener('click', exportLedger);
   $('#dismiss-notice').addEventListener('click', () => { state.noticeDismissed = true; $('#connection-notice').hidden = true; });

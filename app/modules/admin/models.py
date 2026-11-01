@@ -36,6 +36,13 @@ class DashboardSummary(BaseModel):
     ledger_head_hash: Optional[str] = Field(default=None, description="Hash of the most recent ledger block")
     total_credentials: int = Field(description="Total WebAuthn credentials registered across all DIDs")
     revocation_backend: str = Field(description="Active revocation store backend: 'redis' or 'in-memory'")
+    security_events_total: int = 0
+    authentication_attempts: int = 0
+    authentication_successes: int = 0
+    authentication_failures: int = 0
+    access_allowed: int = 0
+    access_denied: int = 0
+    tokens_revoked: int = 0
     subsystems: List[SubsystemHealth] = Field(
         default_factory=list,
         description="Per-subsystem health indicators",
@@ -149,3 +156,22 @@ class SystemHealthResponse(BaseModel):
     total_credentials: int = Field(description="Total WebAuthn credentials")
     revocation_backend: str = Field(description="Active revocation backend")
     subsystems: List[SubsystemHealth] = Field(description="Per-module health breakdown")
+
+
+class SecurityEvent(BaseModel):
+    event_id: str
+    timestamp: str
+    event_type: str
+    outcome: str
+    severity: str
+    did_ref: Optional[str] = None
+    reason: str
+    correlation_id: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SecurityEventPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    events: List[SecurityEvent]

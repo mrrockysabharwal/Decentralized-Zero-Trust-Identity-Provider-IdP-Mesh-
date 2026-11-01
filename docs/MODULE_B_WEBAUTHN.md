@@ -9,6 +9,30 @@
 
 ## 1. Overview & Purpose
 
+### Native browser WebAuthn path
+
+The running login page at `/login` uses the native browser API and the
+maintained Python `webauthn` package. Its routes are:
+
+- `POST /api/v1/webauthn/register/options` and `/register/verify`
+- `POST /api/v1/webauthn/login/options` and `/login/verify`
+
+The server verifies the browser's attestation/assertion against the configured
+origin and RP ID, requires user verification, and updates the credential
+signature counter. On successful login it resolves the account's DID, creates
+a short-lived server-side principal session, and issues a core JWT through the
+normal token policy route. The login page stores the resulting access token in
+`sessionStorage`; the admin dashboard can use it when the DID is configured in
+`IDP_ADMIN_DIDS`.
+
+Use `http://localhost:8000` for local browser testing. Other deployment hosts
+must use HTTPS and configure `WEBAUTHN_RP_ID` and `WEBAUTHN_ORIGIN` to match.
+
+The Ed25519 ceremony documented below is a separate educational simulation
+exposed through `/api/v1/webauthn/register/begin` and
+`/api/v1/webauthn/authenticate/*`. It is not WebAuthn/FIDO2 and does not
+perform biometric recognition.
+
 The **WebAuthn/FIDO2 Passwordless Authentication** module replaces traditional username/password
 login with a cryptographic challenge-response ceremony using **Ed25519 keys** (simulating a
 hardware security key or biometric authenticator).

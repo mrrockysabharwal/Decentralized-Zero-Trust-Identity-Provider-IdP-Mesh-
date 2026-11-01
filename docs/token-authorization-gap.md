@@ -1,41 +1,38 @@
-# Token issuance and revocation authorization gap
+# Authentication-to-token authorization
 
-## Current behavior
+## Implemented behavior
 
-The token router has no authenticated caller identity to authorize. The
-application health response reports WebAuthn as
-`pending_module_integration`, and the repository contains no passkey assertion
-verifier, authenticated session store, or FastAPI dependency that supplies a
-verified DID principal. A ledger entry proves only that a DID was recorded; it
-does not prove that the current caller controls that DID.
+The custom Ed25519 authentication simulation now creates a short-lived,
+opaque bearer session only after the challenge has been consumed and the
+credential signature has been verified. The session is stored server-side and
+bound to the verified DID. `POST /api/v1/tokens/issue` requires that session
+and rejects requests for a different DID before evaluating policy.
 
-Before this change, `POST /api/v1/tokens/issue` accepted a DID from the request
-body and checked only ledger state and requested scopes. `POST
-/api/v1/tokens/revoke` accepted a caller-supplied JTI and revoked it without
-checking its owner. Neither endpoint authenticated its caller.
+`POST /api/v1/tokens/revoke` requires a signed, unexpired access JWT. The
+request JTI must match that JWT's JTI, so a caller cannot revoke another
+session's token by submitting an arbitrary identifier. The deny-list TTL is
+bounded by the token's remaining lifetime.
 
-Both endpoints now return `503 Service Unavailable` without performing the
-operation. This is a fail-closed availability measure, not an authentication
-implementation. Token verification, public-key publication, and scope listing
-remain available.
+## Limitations
 
-## Smallest sound next step
+- Authentication sessions are held in process memory. They expire after five
+  minutes and are lost on restart; a multi-worker deployment needs shared,
+  expiring session storage.
+- This is still the project's Ed25519 ceremony simulation, not browser
+  WebAuthn/FIDO2 verification.
+- Configure administrator identities in `IDP_ADMIN_DIDS` as a comma-separated
+  list of DIDs. Only those identities receive the server-assigned `role=admin`
+  claim when tokens are issued; client-supplied `role` claims are discarded.
+- Every `/api/v1/admin/*` route requires a valid, unrevoked JWT with
+  `role=admin`. Missing or invalid tokens receive 401; a regular-user token
+  receives 403.
 
-Complete or integrate the real WebAuthn authentication module so it verifies
-assertions and returns a server-trusted principal containing the DID bound to
-the authenticated credential. Add a FastAPI dependency for that verified
-principal, then:
+## API flow
 
-1. Require it on token issuance and reject any request whose target DID differs
-   from the authenticated principal's DID. Continue applying ledger and scope
-   policy after that ownership check.
-2. Require an authenticated principal on revocation and establish token
-   ownership before writing a JTI to the deny-list. For self-service
-   revocation, validate a signed, unexpired bearer token and permit only its
-   own JTI. Any cross-user or administrative revocation needs a separately
-   defined trusted role and ownership policy.
-3. Add positive tests for the real verified-principal dependency as well as
-   cross-DID issuance and revocation denial.
-
-Do not treat a request-body DID, an unverified JWT payload, a ledger record,
-or a caller-supplied JTI as proof of identity or ownership.
+1. Complete `/api/v1/webauthn/authenticate/complete` and retain the returned
+   `session_token` until its `session_expires_in` timeout.
+2. Send `Authorization: Bearer <session_token>` to `/api/v1/tokens/issue`.
+   The requested body DID must equal the authenticated DID.
+3. To revoke, send `Authorization: Bearer <access_token>` to
+   `/api/v1/tokens/revoke` with the same token's JTI in the request body.
+4. Subsequent token verification rejects that revoked access token.

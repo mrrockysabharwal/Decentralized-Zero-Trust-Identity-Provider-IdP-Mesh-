@@ -23,7 +23,16 @@ modules, plus two privileged write operations:
 
 ---
 
-## 2. Module Structure
+## 2. Administrative Access
+
+Every `/api/v1/admin/*` route requires a valid, unrevoked bearer JWT with
+`role=admin`. Configure trusted administrator DIDs using the comma-separated
+`IDP_ADMIN_DIDS` environment variable. The token service assigns this role
+based on the authenticated DID; a caller's `extra_claims.role` is ignored.
+Missing or invalid tokens receive 401, while a valid non-admin token receives
+403.
+
+## 3. Module Structure
 
 ```
 app/modules/admin/
@@ -39,7 +48,7 @@ tests/integration/test_ledger_tamper_e2e.py    ← tamper → 403 chain reaction
 
 ---
 
-## 3. API Endpoints
+## 4. API Endpoints
 
 | Method | Path | Description | Status Code |
 |--------|------|-------------|-------------|
@@ -53,10 +62,17 @@ tests/integration/test_ledger_tamper_e2e.py    ← tamper → 403 chain reaction
 | `GET`  | `/admin/tokens/policy` | Active token policy (scopes, TTL, algorithm) | 200 |
 | `POST` | `/admin/ledger/simulate-tamper` | Demo tamper-detection (destructive, in-memory) | 200/400 |
 | `GET`  | `/admin/health` | Aggregate health of all subsystems | 200 |
+| `GET`  | `/admin/events` | Filtered, paginated security event feed | 200 |
+| `GET`  | `/admin/events/{event_id}` | One event detail | 200/404 |
+
+Security events are persisted in SQLite (`AUDIT_DB_PATH`, default
+`data/security_events.sqlite3`). Identity values are returned as SHA-256
+pseudonymous references. Event records exclude access tokens, JTIs, private
+keys, credential public-key bytes, and raw IP addresses.
 
 ---
 
-## 4. Dashboard Summary
+## 5. Dashboard Summary
 
 ### `GET /api/v1/admin/dashboard`
 

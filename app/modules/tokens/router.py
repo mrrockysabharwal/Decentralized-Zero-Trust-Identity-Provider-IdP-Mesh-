@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import jwt as pyjwt
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 
 from app.modules.ledger.chain import SimulatedLedger
 from app.modules.tokens.jwt_engine import (
@@ -44,6 +44,8 @@ from app.modules.tokens.models import (
 )
 from app.modules.tokens.policy import ZeroTrustPolicyEngine
 from app.modules.tokens.revocation import TokenRevocationStore
+from app.modules.webauthn.session_store import auth_session_store, VerifiedPrincipal
+from app.modules.audit.event_store import record_security_event
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +111,7 @@ def get_revocation_store() -> TokenRevocationStore:
     status_code=status.HTTP_201_CREATED,
     summary="Issue a JWT access token for an authenticated DID",
 )
-def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
+def issue_access_token(payload: TokenIssueRequest, authorization: str | None = Header(default=None)) -> TokenIssueResponse:
     """Issue a signed JWT access token after evaluating Zero-Trust policy.
 
     The policy engine checks:
@@ -120,6 +122,17 @@ def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
 
     Returns **403 Forbidden** if any policy check fails.
     """
+    try:
+        principal = _session_principal(authorization)
+    except HTTPException:
+        record_security_event(event_type="token_issuance", outcome="failure", severity="medium",
+                              reason="verified_authentication_required")
+        raise
+    if payload.did != principal.did:
+        record_security_event(event_type="policy_decision", outcome="deny", severity="high",
+                              did=principal.did, reason="requested_did_mismatch")
+        raise HTTPException(status_code=403, detail="Requested DID does not match the authenticated principal.")
+
     engine = get_policy_engine()
     policy_result = engine.evaluate(
         did=payload.did,
@@ -128,6 +141,8 @@ def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
     )
 
     if not policy_result.allowed:
+        record_security_event(event_type="policy_decision", outcome="deny", severity="medium",
+                              did=payload.did, reason="policy_denied")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=policy_result.reason,
@@ -139,6 +154,12 @@ def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
     did_verified_at: Optional[str] = latest_record.timestamp if latest_record else None
 
     try:
+        configured_admin_dids = {
+            did.strip() for did in os.environ.get("IDP_ADMIN_DIDS", "").split(",") if did.strip()
+        }
+        # Never permit a caller to assign a trusted authorization claim.
+        server_claims = {key: value for key, value in payload.extra_claims.items() if key != "role"}
+        server_claims["role"] = "admin" if payload.did in configured_admin_dids else "user"
         token_str, jti = issue_token(
             did=payload.did,
             scope=payload.scope,
@@ -147,7 +168,7 @@ def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
             expiry_seconds=DEFAULT_TOKEN_EXPIRY_SECONDS,
             did_verified_at=did_verified_at,
             did_status="ACTIVE",
-            extra_claims=payload.extra_claims,
+            extra_claims=server_claims,
         )
     except Exception as exc:
         logger.exception("Token issuance failed for DID=%s: %s", payload.did, exc)
@@ -155,6 +176,11 @@ def issue_access_token(payload: TokenIssueRequest) -> TokenIssueResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Token issuance failed: {exc}",
         ) from exc
+
+    record_security_event(event_type="policy_decision", outcome="allow", severity="low",
+                          did=payload.did, reason="policy_allowed", metadata={"scope_count": len(payload.scope)})
+    record_security_event(event_type="token_issuance", outcome="success", severity="low",
+                          did=payload.did, reason="access_token_issued", metadata={"scope_count": len(payload.scope)})
 
     return TokenIssueResponse(
         access_token=token_str,
@@ -203,14 +229,27 @@ def verify_access_token(payload: TokenVerifyRequest) -> TokenVerifyResponse:
     response_model=TokenRevokeResponse,
     summary="Revoke a JWT access token by JTI",
 )
-def revoke_access_token(payload: TokenRevokeRequest) -> TokenRevokeResponse:
+def revoke_access_token(payload: TokenRevokeRequest, authorization: str | None = Header(default=None)) -> TokenRevokeResponse:
     """Add a token's JTI to the deny-list, preventing future use.
 
     The revocation entry is stored with a TTL equal to the default token
     lifetime so the deny-list self-cleans when the token would have expired.
     """
+    try:
+        claims = _access_token_claims(authorization)
+    except HTTPException:
+        record_security_event(event_type="token_revocation", outcome="failure", severity="medium",
+                              reason="valid_access_token_required")
+        raise
+    if claims.get("jti") != payload.jti:
+        record_security_event(event_type="token_revocation", outcome="failure", severity="high",
+                              did=claims.get("sub"), reason="jti_ownership_mismatch")
+        raise HTTPException(status_code=403, detail="A user may revoke only their own presented token.")
     revocation_store = get_revocation_store()
-    revocation_store.revoke(jti=payload.jti, ttl_seconds=DEFAULT_TOKEN_EXPIRY_SECONDS)
+    ttl = max(1, int(claims.get("exp", 0) - datetime.now(timezone.utc).timestamp()))
+    revocation_store.revoke(jti=payload.jti, ttl_seconds=ttl)
+    record_security_event(event_type="token_revocation", outcome="success", severity="low",
+                          did=claims.get("sub"), reason="owner_revoked_token")
 
     reason_note = f" Reason: {payload.reason}" if payload.reason else ""
     logger.info("Token revoked: jti=%s.%s", payload.jti, reason_note)
@@ -220,6 +259,44 @@ def revoke_access_token(payload: TokenRevokeRequest) -> TokenRevokeResponse:
         jti=payload.jti,
         message=f"Token (jti={payload.jti}) has been revoked and added to the deny-list.{reason_note}",
     )
+
+
+def _bearer_value(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Bearer authentication is required.")
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not value:
+        raise HTTPException(status_code=401, detail="Invalid bearer authorization header.")
+    return value
+
+
+def _session_principal(authorization: str | None) -> VerifiedPrincipal:
+    principal = auth_session_store.resolve(_bearer_value(authorization))
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Authentication session is invalid or expired.")
+    return principal
+
+
+def _access_token_claims(authorization: str | None) -> dict:
+    try:
+        return verify_token(_bearer_value(authorization), get_public_key())
+    except pyjwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="A valid access token is required to revoke it.") from exc
+
+
+@router.get("/protected/profile", tags=["Protected Resources"])
+def get_protected_profile(authorization: str | None = Header(default=None)) -> dict:
+    """Example protected resource: valid, unrevoked token with read:profile scope."""
+    claims = _access_token_claims(authorization)
+    jti = claims.get("jti", "")
+    if get_revocation_store().is_revoked(jti):
+        raise HTTPException(status_code=401, detail="Access token has been revoked.")
+    scopes = claims.get("scope", [])
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    if "read:profile" not in scopes:
+        raise HTTPException(status_code=403, detail="Token does not grant read:profile.")
+    return {"resource": "profile", "did": claims["sub"], "allowed": True}
 
 
 @router.get(

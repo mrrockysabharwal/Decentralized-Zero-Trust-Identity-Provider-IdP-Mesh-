@@ -22,8 +22,10 @@ from app.modules.ledger.models import LedgerOperation
 from app.modules.ledger.hasher import hash_did_document
 from app.modules.tokens import tokens_router
 from app.modules.tokens.jwt_engine import generate_signing_keypair, issue_token
+from app.modules.tokens.jwt_engine import verify_token
 from app.modules.tokens.policy import ZeroTrustPolicyEngine
 from app.modules.tokens.revocation import TokenRevocationStore
+from app.modules.webauthn.session_store import auth_session_store
 import app.modules.tokens.router as tokens_router_module
 
 
@@ -32,7 +34,7 @@ import app.modules.tokens.router as tokens_router_module
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def app_client():
     """Wire a fresh FastAPI test app with isolated token module dependencies."""
     # Fresh Ed25519 keypair
@@ -51,7 +53,12 @@ def app_client():
     test_revocation = TokenRevocationStore(redis_url="redis://localhost:0/99")
     test_revocation.clear_in_memory()
 
-    # Patch router module singletons
+    # Save and patch router module dependencies, restoring them after each test.
+    original_values = {
+        name: getattr(tokens_router_module, name)
+        for name in ("_private_key_pem", "_public_key_pem", "_shared_ledger", "_policy_engine", "_revocation_store",
+                     "get_private_key", "get_public_key", "get_ledger", "get_policy_engine", "get_revocation_store")
+    }
     tokens_router_module._private_key_pem = private_pem
     tokens_router_module._public_key_pem = public_pem
     tokens_router_module._shared_ledger = test_ledger
@@ -69,7 +76,12 @@ def app_client():
     test_app = FastAPI()
     test_app.include_router(tokens_router, prefix="/api/v1")
 
-    return TestClient(test_app), active_did, private_pem, public_pem, test_revocation
+    auth_session_store.clear()
+    session_token, _ = auth_session_store.create(active_did)
+    with TestClient(test_app, headers={"Authorization": f"Bearer {session_token}"}) as client:
+        yield client, active_did, private_pem, public_pem, test_revocation
+    for name, value in original_values.items():
+        setattr(tokens_router_module, name, value)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +104,40 @@ def test_issue_endpoint_happy_path(app_client):
     assert "read:profile" in data["scope"]
     assert "jti" in data
     assert data["expires_in"] > 0
+
+
+def test_issue_requires_authenticated_session(app_client):
+    client, active_did, *_ = app_client
+    response = client.post("/api/v1/tokens/issue", headers={"Authorization": ""}, json={"did": active_did})
+    assert response.status_code == 401
+
+
+def test_issue_rejects_did_other_than_authenticated_principal(app_client):
+    client, active_did, *_ = app_client
+    other_session, _ = auth_session_store.create("did:mesh:key:another-user")
+    response = client.post(
+        "/api/v1/tokens/issue",
+        headers={"Authorization": f"Bearer {other_session}"},
+        json={"did": active_did},
+    )
+    assert response.status_code == 403
+
+
+def test_admin_role_is_server_assigned_and_cannot_be_requested(app_client, monkeypatch):
+    client, active_did, _, public_pem, *_ = app_client
+    monkeypatch.delenv("IDP_ADMIN_DIDS", raising=False)
+    response = client.post(
+        "/api/v1/tokens/issue",
+        json={"did": active_did, "scope": ["read:profile"], "extra_claims": {"role": "admin"}},
+    )
+    claims = verify_token(response.json()["access_token"], public_pem)
+    assert response.status_code == 201
+    assert claims["role"] == "user"
+
+    monkeypatch.setenv("IDP_ADMIN_DIDS", active_did)
+    response = client.post("/api/v1/tokens/issue", json={"did": active_did, "scope": ["read:profile"]})
+    claims = verify_token(response.json()["access_token"], public_pem)
+    assert claims["role"] == "admin"
 
 
 def test_issue_endpoint_returns_valid_jwt_structure(app_client):
@@ -150,6 +196,26 @@ def test_verify_endpoint_valid_token(app_client):
     assert data["claims"]["sub"] == active_did
 
 
+def test_protected_resource_requires_valid_token_and_scope(app_client):
+    client, active_did, private_pem, *_ = app_client
+    token, _ = issue_token(did=active_did, scope=["read:profile"], private_key_pem=private_pem)
+    response = client.get("/api/v1/tokens/protected/profile", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json() == {"resource": "profile", "did": active_did, "allowed": True}
+
+    no_scope_token, _ = issue_token(did=active_did, scope=["write:did"], private_key_pem=private_pem)
+    denied = client.get("/api/v1/tokens/protected/profile", headers={"Authorization": f"Bearer {no_scope_token}"})
+    assert denied.status_code == 403
+
+
+def test_protected_resource_rejects_revoked_token(app_client):
+    client, active_did, private_pem, *_ = app_client
+    token, jti = issue_token(did=active_did, scope=["read:profile"], private_key_pem=private_pem)
+    tokens_router_module.get_revocation_store().revoke(jti, ttl_seconds=3600)
+    response = client.get("/api/v1/tokens/protected/profile", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
+
+
 def test_verify_endpoint_invalid_token_string_returns_invalid(app_client):
     """Verifying a garbage string must return valid=False with an error."""
     client, *_ = app_client
@@ -185,11 +251,12 @@ def test_verify_endpoint_revoked_token_returns_invalid(app_client):
 
 
 def test_revoke_endpoint_returns_200_and_confirmation(app_client):
-    """Revoking a JTI must return 200 with revoked=True and the JTI echoed back."""
-    client, *_ = app_client
-    jti = "router-test-jti-to-revoke"
+    """A caller can revoke only the JTI in their signed bearer token."""
+    client, active_did, private_pem, *_ = app_client
+    token, jti = issue_token(did=active_did, scope=["read:profile"], private_key_pem=private_pem)
     response = client.post(
         "/api/v1/tokens/revoke",
+        headers={"Authorization": f"Bearer {token}"},
         json={"jti": jti, "reason": "test revocation"},
     )
     assert response.status_code == 200
@@ -197,6 +264,16 @@ def test_revoke_endpoint_returns_200_and_confirmation(app_client):
     assert data["revoked"] is True
     assert data["jti"] == jti
     assert jti in data["message"]
+
+
+def test_revoke_rejects_caller_supplied_other_jti(app_client):
+    client, active_did, private_pem, *_ = app_client
+    token, _ = issue_token(did=active_did, scope=["read:profile"], private_key_pem=private_pem)
+    response = client.post(
+        "/api/v1/tokens/revoke", headers={"Authorization": f"Bearer {token}"},
+        json={"jti": "somebody-elses-jti"},
+    )
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------

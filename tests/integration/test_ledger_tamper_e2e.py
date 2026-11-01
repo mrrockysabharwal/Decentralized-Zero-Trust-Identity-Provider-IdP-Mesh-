@@ -17,11 +17,18 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
+from app.modules.webauthn.session_store import auth_session_store
+from app.modules.tokens.jwt_engine import issue_token
+import app.modules.tokens.router as token_router
 
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as c:
+    admin_jwt, _ = issue_token(
+        did="did:mesh:key:test-admin", scope=["admin:ledger"],
+        private_key_pem=token_router.get_private_key(), extra_claims={"role": "admin"},
+    )
+    with TestClient(app, headers={"Authorization": f"Bearer {admin_jwt}"}) as c:
         yield c
 
 
@@ -36,17 +43,20 @@ class TestLedgerTamperChainReaction:
     """
 
     did: str = ""
+    session: str = ""
 
     def test_01_create_and_anchor_did(self, client):
         """Establish a valid DID so we have something to issue tokens for."""
         resp = client.post("/api/v1/did/create", json={"display_name": "TamperTestDID"})
         assert resp.status_code == 201
         TestLedgerTamperChainReaction.did = resp.json()["did"]
+        TestLedgerTamperChainReaction.session, _ = auth_session_store.create(TestLedgerTamperChainReaction.did)
 
     def test_02_token_issue_works_before_tamper(self, client):
         """Confirm token issuance succeeds with a clean ledger."""
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {self.session}"},
             json={"did": self.did, "scope": ["read:profile"]},
         )
         assert resp.status_code == 201, resp.text
@@ -81,6 +91,7 @@ class TestLedgerTamperChainReaction:
         """
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {self.session}"},
             json={"did": self.did, "scope": ["read:profile"]},
         )
         assert resp.status_code == 403, resp.text

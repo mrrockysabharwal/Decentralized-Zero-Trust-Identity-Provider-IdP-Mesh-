@@ -38,7 +38,7 @@ from typing import Any, Dict
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 # ── Load .env before any env-var reads ───────────────────────────────────────
@@ -247,6 +247,13 @@ app.include_router(shad_ui_router, prefix="/shad")
 app.include_router(shad_passkey_router, prefix="/api/v1")
 app.include_router(shad_data_router, prefix="/api/v1")
 app.include_router(shad_oidc_router, prefix="/api/v1")
+
+
+@app.get("/login", include_in_schema=False)
+@app.get("/login.html", include_in_schema=False)
+async def login_page_alias() -> RedirectResponse:
+    """Convenient aliases for the login page served under /shad/."""
+    return RedirectResponse(url="/shad/login.html", status_code=307)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

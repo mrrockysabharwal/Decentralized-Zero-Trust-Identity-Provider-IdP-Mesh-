@@ -41,6 +41,8 @@ from app.modules.webauthn.models import (
     RegistrationCompleteResponse,
 )
 from app.modules.webauthn.webauthn_service import WebAuthnService
+from app.modules.webauthn.session_store import auth_session_store
+from app.modules.audit.event_store import record_security_event
 
 logger = logging.getLogger("idp_mesh.webauthn.router")
 
@@ -121,7 +123,7 @@ def register_complete(payload: RegistrationCompleteRequest) -> RegistrationCompl
     invalid, or the DID binding does not match.
     """
     try:
-        return _get_service().complete_registration(
+        result = _get_service().complete_registration(
             did=payload.did,
             challenge_b64=payload.challenge,
             public_key_b64=payload.public_key_b64,
@@ -129,9 +131,16 @@ def register_complete(payload: RegistrationCompleteRequest) -> RegistrationCompl
             credential_id=payload.credential_id,
             device_info=payload.device_info,
         )
+        record_security_event(event_type="credential_registration", outcome="success",
+                              severity="low", did=payload.did, reason="credential_registered")
+        return result
     except ValueError as exc:
+        record_security_event(event_type="credential_registration", outcome="failure",
+                              severity="medium", did=payload.did, reason="registration_verification_failed")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:
+        record_security_event(event_type="credential_registration", outcome="failure",
+                              severity="high", did=payload.did, reason="registration_internal_error")
         logger.exception("Unexpected error during registration completion: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -162,8 +171,13 @@ def authenticate_begin(payload: AuthenticationBeginRequest) -> AuthenticationBeg
     Returns **404 Not Found** if no credentials are registered for the DID.
     """
     try:
-        return _get_service().begin_authentication(did=payload.did)
+        result = _get_service().begin_authentication(did=payload.did)
+        record_security_event(event_type="authentication_challenge", outcome="success",
+                              severity="low", did=payload.did, reason="challenge_issued")
+        return result
     except ValueError as exc:
+        record_security_event(event_type="authentication_challenge", outcome="failure",
+                              severity="medium", did=payload.did, reason="challenge_not_issued")
         # No credentials registered → meaningful 404
         if "No credentials registered" in str(exc):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -188,15 +202,23 @@ def authenticate_complete(payload: AuthenticationCompleteRequest) -> Authenticat
     has expired, or the credential does not belong to the DID.
     """
     try:
-        return _get_service().complete_authentication(
+        result = _get_service().complete_authentication(
             did=payload.did,
             challenge_b64=payload.challenge,
             credential_id=payload.credential_id,
             signature_b64=payload.signature_b64,
         )
+        session_token, ttl = auth_session_store.create(result.did)
+        record_security_event(event_type="authentication", outcome="success",
+                              severity="low", did=result.did, reason="assertion_verified")
+        return result.model_copy(update={"session_token": session_token, "session_expires_in": ttl})
     except ValueError as exc:
+        record_security_event(event_type="authentication", outcome="failure",
+                              severity="medium", did=payload.did, reason="assertion_verification_failed")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     except Exception as exc:
+        record_security_event(event_type="authentication", outcome="failure",
+                              severity="high", did=payload.did, reason="authentication_internal_error")
         logger.exception("Unexpected error during authentication completion: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

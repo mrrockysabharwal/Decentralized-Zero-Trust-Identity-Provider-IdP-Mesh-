@@ -43,6 +43,7 @@
         <div class="topbar-title"><span class="eyebrow">ADMINISTRATION</span><h1 id="page-title">Overview</h1></div>
         <div class="topbar-actions">
           <div class="connection-chip" id="connection-chip" role="status" aria-live="polite"><span class="status-dot"></span><span id="connection-label">Checking API</span></div>
+          <a class="button button-tonal" href="/login" aria-label="Back to login"><span aria-hidden="true">&larr;</span><span>Back to login</span></a>
           <button class="button button-tonal" id="refresh-button" type="button"><span aria-hidden="true">↻</span><span>Refresh</span></button>
         </div>
       </header>
@@ -100,14 +101,21 @@
             <section class="surface-card"><div class="card-heading"><div><h3>Verify a token</h3><p>Validation sends the token to the configured API. The input is masked and cleared after submission.</p></div><span class="endpoint-label">POST /tokens/verify</span></div><form id="verify-form"><label class="field-label" for="verify-token">JWT bearer token</label><input id="verify-token" class="text-field mono" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required placeholder="Paste a token only when appropriate"><div class="form-actions"><button class="button button-primary" id="verify-button" type="submit">Verify token</button><button class="button button-text" id="clear-token-button" type="button">Clear input</button></div></form><div class="result-panel" id="verify-result" role="status" aria-live="polite" hidden></div></section>
           </div>
           <div class="content-grid unavailable-grid">
-            <section class="unavailable-card"><span class="unavailable-icon" aria-hidden="true">Ⅱ</span><div><h3>Token issuance unavailable</h3><p>The API currently returns <code>503 Service Unavailable</code> until verified caller authentication is integrated. No issuance action is available here.</p></div><span class="status-chip warning">Unavailable</span></section>
-            <section class="unavailable-card"><span class="unavailable-icon" aria-hidden="true">Ⅱ</span><div><h3>Token revocation unavailable</h3><p>The API currently returns <code>503 Service Unavailable</code> until token ownership authorization is integrated. No revocation action is available here.</p></div><span class="status-chip warning">Unavailable</span></section>
+            <section class="unavailable-card"><span class="unavailable-icon" aria-hidden="true">Ⅱ</span><div><h3>Token issuance</h3><p>Issuance is available to a recently authenticated DID through <code>POST /tokens/issue</code> using the short-lived session returned by authentication.</p></div><span class="status-chip neutral">Session required</span></section>
+            <section class="unavailable-card"><span class="unavailable-icon" aria-hidden="true">Ⅱ</span><div><h3>Token revocation</h3><p>Self-revocation is available through <code>POST /tokens/revoke</code> when the caller presents the signed token and its matching JTI.</p></div><span class="status-chip neutral">Owner only</span></section>
           </div>
         </section>
 
         <section class="page-section" id="section-events" aria-labelledby="events-heading" hidden>
-          <div class="page-heading"><div><p class="eyebrow">AUDIT TELEMETRY</p><h2 id="events-heading">Security events</h2><p class="supporting-text">Cross-module event history is not available from the current API.</p></div></div>
-          <div class="empty-card"><span class="empty-icon" aria-hidden="true">≋</span><h3>No security events endpoint</h3><p>The project does not currently expose an event-store route. Ledger records and integrity status are shown in their respective sections; no events are synthesized here.</p><a class="button button-tonal" href="#ledger">Review ledger activity</a></div>
+          <div class="page-heading"><div><p class="eyebrow">AUDIT TELEMETRY</p><h2 id="events-heading">Security events</h2><p class="supporting-text">Authentication, policy, token revocation, and ledger-integrity activity. Admin access is required.</p></div></div>
+          <section class="surface-card">
+            <form id="admin-token-form"><label class="field-label" for="admin-token">Administrator access token</label><div class="toolbar"><input id="admin-token" class="text-field mono" type="password" autocomplete="off" placeholder="Paste a role=admin JWT" required><button class="button button-primary" type="submit">Connect</button><button class="button button-text" id="clear-admin-token" type="button">Clear</button></div><p class="supporting-text">Token is held in page memory only. Obtain it by authenticating with a DID listed in <code>IDP_ADMIN_DIDS</code>.</p></form>
+          </section>
+          <div class="metrics-grid" id="event-metrics"><div class="metric-card"><span>Total events</span><strong id="event-total">â€”</strong></div><div class="metric-card"><span>Auth attempts</span><strong id="auth-attempt-count">â€”</strong></div><div class="metric-card"><span>Auth successes</span><strong id="auth-success-count">â€”</strong></div><div class="metric-card"><span>Auth failures</span><strong id="auth-failure-count">â€”</strong></div><div class="metric-card"><span>Access denied</span><strong id="access-denied-count">â€”</strong></div></div>
+          <section class="surface-card">
+            <div class="toolbar"><div><h3>Recent events</h3><p id="event-count">Waiting for administrator access</p></div><div class="toolbar"><select id="event-type-filter" class="text-field"><option value="">All event types</option><option value="authentication">Authentication</option><option value="credential_registration">Credential registration</option><option value="policy_decision">Policy decision</option><option value="token_issuance">Token issuance</option><option value="token_revocation">Token revocation</option><option value="ledger_integrity">Ledger integrity</option></select><select id="event-outcome-filter" class="text-field"><option value="">All outcomes</option><option value="success">Success</option><option value="failure">Failure</option><option value="allow">Allowed</option><option value="deny">Denied</option></select><button class="button button-tonal" id="events-refresh-button" type="button">Refresh events</button></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Severity</th><th>Identity ref</th><th>Reason / details</th></tr></thead><tbody id="security-events-body"><tr><td colspan="6">Connect with an administrator token to load events.</td></tr></tbody></table></div>
+          </section>
         </section>
 
         <section class="page-section" id="section-health" aria-labelledby="health-heading" hidden>

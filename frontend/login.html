@@ -539,6 +539,9 @@
                     sessionStorage.setItem("idp_access_token", result.access_token);
                     sessionStorage.setItem("idp_authenticated_did", result.did);
                 }
+                if (result.session_token) {
+                    sessionStorage.setItem("idp_auth_session", result.session_token);
+                }
 
                 showMessage(
                     result.message ||

@@ -31,6 +31,19 @@ from app.modules.ledger.models import LedgerOperation
 from app.modules.ledger.hasher import hash_did_document
 from app.modules.webauthn.credential_store import CredentialStore
 from app.modules.tokens.revocation import TokenRevocationStore
+from app.modules.audit.event_store import AuditEventStore
+from app.modules.tokens.jwt_engine import issue_token
+import app.modules.tokens.router as _token_module
+
+
+def _auth_headers(role: str = "admin") -> dict[str, str]:
+    token, _ = issue_token(
+        did="did:mesh:key:admin-test",
+        scope=["admin:ledger"],
+        private_key_pem=_token_module.get_private_key(),
+        extra_claims={"role": role},
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -54,19 +67,20 @@ def rev_store() -> TokenRevocationStore:
 
 
 @pytest.fixture()
-def client(ledger, cred_store, rev_store) -> TestClient:
+def client(ledger, cred_store, rev_store, tmp_path, monkeypatch) -> TestClient:
     """Wire all stores into the admin module, return a TestClient."""
     _admin_module._shared_ledger    = ledger
     _admin_module._credential_store = cred_store
     _admin_module._revocation_store = rev_store
+    monkeypatch.setattr(_admin_module, "audit_event_store", AuditEventStore(str(tmp_path / "admin-events.sqlite3")))
 
     app = FastAPI()
     app.include_router(admin_router, prefix="/api/v1")
-    return TestClient(app)
+    return TestClient(app, headers=_auth_headers())
 
 
 @pytest.fixture()
-def populated_client(ledger, cred_store, rev_store) -> TestClient:
+def populated_client(ledger, cred_store, rev_store, tmp_path, monkeypatch) -> TestClient:
     """Client with a DID anchored on the ledger and a WebAuthn credential registered."""
     # Anchor a DID
     did = "did:mesh:key:deadbeef1234"
@@ -82,10 +96,11 @@ def populated_client(ledger, cred_store, rev_store) -> TestClient:
     _admin_module._shared_ledger    = ledger
     _admin_module._credential_store = cred_store
     _admin_module._revocation_store = rev_store
+    monkeypatch.setattr(_admin_module, "audit_event_store", AuditEventStore(str(tmp_path / "populated-events.sqlite3")))
 
     app = FastAPI()
     app.include_router(admin_router, prefix="/api/v1")
-    return TestClient(app), did
+    return TestClient(app, headers=_auth_headers()), did
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +180,7 @@ class TestIdentities:
         _admin_module._revocation_store = rev_store
         app = FastAPI()
         app.include_router(admin_router, prefix="/api/v1")
-        tc = TestClient(app)
+        tc = TestClient(app, headers=_auth_headers())
 
         data = tc.get("/api/v1/admin/identities").json()
         row = next(r for r in data if r["did"] == did)
@@ -368,6 +383,48 @@ class TestUnwiredStores:
         _admin_module._revocation_store = None
         app = FastAPI()
         app.include_router(admin_router, prefix="/api/v1")
-        tc = TestClient(app)
+        tc = TestClient(app, headers=_auth_headers())
         resp = tc.get("/api/v1/admin/dashboard")
         assert resp.status_code == 503
+
+
+class TestAdminAuthorization:
+    def test_admin_route_requires_authentication(self, client):
+        response = client.get("/api/v1/admin/dashboard", headers={"Authorization": ""})
+        assert response.status_code == 401
+
+    def test_regular_user_cannot_access_admin_route(self, client):
+        response = client.get("/api/v1/admin/dashboard", headers=_auth_headers("user"))
+        assert response.status_code == 403
+
+    def test_admin_can_access_admin_route(self, client):
+        response = client.get("/api/v1/admin/dashboard")
+        assert response.status_code == 200
+
+
+class TestSecurityEvents:
+    def test_events_list_filter_detail_and_pagination(self, client):
+        store = _admin_module.audit_event_store
+        first = store.record(event_type="authentication", outcome="success", reason="assertion_verified")
+        store.record(event_type="authentication", outcome="failure", reason="assertion_verification_failed")
+        store.record(event_type="token_revocation", outcome="success", reason="owner_revoked_token")
+
+        response = client.get("/api/v1/admin/events?page=1&page_size=1&event_type=authentication")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        assert len(payload["events"]) == 1
+        assert payload["events"][0]["event_type"] == "authentication"
+
+        detail = client.get(f"/api/v1/admin/events/{first['event_id']}")
+        assert detail.status_code == 200
+        assert detail.json()["reason"] == "assertion_verified"
+        assert client.get("/api/v1/admin/events/missing").status_code == 404
+
+    def test_dashboard_summary_includes_event_counts(self, client):
+        _admin_module.audit_event_store.record(event_type="authentication", outcome="success", reason="ok")
+        _admin_module.audit_event_store.record(event_type="policy_decision", outcome="deny", reason="denied")
+        data = client.get("/api/v1/admin/dashboard").json()
+        assert data["security_events_total"] == 2
+        assert data["authentication_successes"] == 1
+        assert data["access_denied"] == 1

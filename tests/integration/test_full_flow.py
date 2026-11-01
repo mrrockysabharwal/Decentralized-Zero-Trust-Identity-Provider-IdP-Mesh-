@@ -32,6 +32,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from fastapi.testclient import TestClient
 from app.main import app
+from app.modules.webauthn.session_store import auth_session_store
+from app.modules.tokens.jwt_engine import issue_token
+import app.modules.tokens.router as token_router
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +43,11 @@ from app.main import app
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as c:
+    admin_jwt, _ = issue_token(
+        did="did:mesh:key:test-admin", scope=["admin:ledger"],
+        private_key_pem=token_router.get_private_key(), extra_claims={"role": "admin"},
+    )
+    with TestClient(app, headers={"Authorization": f"Bearer {admin_jwt}"}) as c:
         yield c
 
 
@@ -82,6 +89,7 @@ class TestFullIdentityLifecycle:
     credential_id: str = ""
     access_token: str = ""
     jti: str = ""
+    session_token: str = ""
 
     # ------------------------------------------------------------------
     # Step 1 — DID Create
@@ -163,6 +171,10 @@ class TestFullIdentityLifecycle:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["success"] is True
+        TestFullIdentityLifecycle.session_token = resp.json()["session_token"]
+        audit = client.get("/api/v1/admin/events?event_type=authentication&outcome=success")
+        assert audit.status_code == 200, audit.text
+        assert any(event["did_ref"] != self.did for event in audit.json()["events"])
 
     # ------------------------------------------------------------------
     # Step 4 — Token Issuance
@@ -171,6 +183,7 @@ class TestFullIdentityLifecycle:
     def test_06_token_issue(self, client):
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {self.session_token}"},
             json={"did": self.did, "scope": ["read:profile", "auth:webauthn"]},
         )
         assert resp.status_code == 201, resp.text
@@ -184,6 +197,7 @@ class TestFullIdentityLifecycle:
         """require_webauthn=True must pass because we completed registration above."""
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {self.session_token}"},
             json={
                 "did": self.did,
                 "scope": ["read:profile"],
@@ -205,6 +219,9 @@ class TestFullIdentityLifecycle:
         data = resp.json()
         assert data["valid"] is True
         assert data["claims"]["sub"] == self.did
+        protected = client.get("/api/v1/tokens/protected/profile", headers={"Authorization": f"Bearer {self.access_token}"})
+        assert protected.status_code == 200
+        assert protected.json()["did"] == self.did
 
     # ------------------------------------------------------------------
     # Step 6 — Token Revoke
@@ -213,6 +230,7 @@ class TestFullIdentityLifecycle:
     def test_09_token_revoke(self, client):
         resp = client.post(
             "/api/v1/tokens/revoke",
+            headers={"Authorization": f"Bearer {self.access_token}"},
             json={"jti": self.jti, "reason": "Integration test teardown"},
         )
         assert resp.status_code == 200, resp.text
@@ -226,6 +244,8 @@ class TestFullIdentityLifecycle:
         data = resp.json()
         assert data["valid"] is False
         assert "revoked" in data["error"].lower()
+        protected = client.get("/api/v1/tokens/protected/profile", headers={"Authorization": f"Bearer {self.access_token}"})
+        assert protected.status_code == 401
 
     # ------------------------------------------------------------------
     # Step 7 — Admin Dashboard reflects the lifecycle
@@ -262,6 +282,7 @@ class TestFullIdentityLifecycle:
     def test_15_token_issue_denied_after_deactivation(self, client):
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {self.session_token}"},
             json={"did": self.did, "scope": ["read:profile"]},
         )
         assert resp.status_code == 403, resp.text
@@ -299,9 +320,11 @@ class TestRequireWebAuthnGate:
         resp = client.post("/api/v1/did/create", json={"display_name": "NoCredDID"})
         assert resp.status_code == 201
         did = resp.json()["did"]
+        session, _ = auth_session_store.create(did)
 
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {session}"},
             json={"did": did, "scope": ["read:profile"], "require_webauthn": True},
         )
         assert resp.status_code == 403
@@ -312,9 +335,11 @@ class TestRequireWebAuthnGate:
         resp = client.post("/api/v1/did/create", json={"display_name": "FlagFalseDID"})
         assert resp.status_code == 201
         did = resp.json()["did"]
+        session, _ = auth_session_store.create(did)
 
         resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {session}"},
             json={"did": did, "scope": ["read:profile"], "require_webauthn": False},
         )
         assert resp.status_code == 201

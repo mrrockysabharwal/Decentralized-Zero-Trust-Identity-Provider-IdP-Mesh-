@@ -478,6 +478,8 @@ class TestDIDEndToEndIntegration:
         # 1. Create DID (anchors to ledger automatically)
         created = _create_did(client)
         did = created["did"]
+        from app.modules.webauthn.session_store import auth_session_store
+        session, _ = auth_session_store.create(did)
         assert created["ledger_record_index"] is not None
 
         # 2. Confirm it's on the ledger
@@ -490,6 +492,7 @@ class TestDIDEndToEndIntegration:
         # 3. Issue a JWT for the DID
         token_resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {session}"},
             json={"did": did, "scope": ["read:profile"]},
         )
         assert token_resp.status_code == 201, token_resp.text
@@ -503,6 +506,8 @@ class TestDIDEndToEndIntegration:
         # Create and anchor the DID
         created = _create_did(client)
         did = created["did"]
+        from app.modules.webauthn.session_store import auth_session_store
+        session, _ = auth_session_store.create(did)
 
         # Deactivate via Module A
         deact_resp = client.post(f"/api/v1/did/deactivate/{did}", json={})
@@ -511,6 +516,7 @@ class TestDIDEndToEndIntegration:
         # Attempt token issuance — must be denied
         token_resp = client.post(
             "/api/v1/tokens/issue",
+            headers={"Authorization": f"Bearer {session}"},
             json={"did": did, "scope": ["read:profile"]},
         )
         assert token_resp.status_code == 403

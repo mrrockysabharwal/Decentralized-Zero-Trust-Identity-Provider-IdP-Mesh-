@@ -1,6 +1,6 @@
 # Decentralized Zero-Trust Identity Provider (IdP) Mesh
 
-A decentralized Zero-Trust Identity Provider built with Python and FastAPI. The system replaces centralized username/password databases with Decentralized Identifiers (DIDs), WebAuthn (FIDO2) biometric ceremony simulation, cryptographic identity anchoring on a simulated blockchain ledger, and continuous Zero-Trust JWT policy validation.
+A decentralized Zero-Trust Identity Provider prototype built with Python and FastAPI. It combines DIDs, browser WebAuthn/FIDO2 passkeys verified by the maintained Python WebAuthn library, a hash-linked simulated ledger, Zero-Trust policy checks, and JWT access tokens. A separate Ed25519 challenge simulation remains available for module demonstrations; it is not itself WebAuthn and neither path performs biometric recognition on the server.
 
 ---
 
@@ -23,7 +23,7 @@ Browser Dashboard ──> FastAPI Application (:8000)
 |:---|:---|:---|:---|:---|:---|
 | **Core Backend** | Main Entry & Orchestration | Member 1 | `main` | `/` | Boots FastAPI, manages CORS, wires shared singletons across modules. |
 | **Module A** | DID Registry & Cryptography | Member 3 | `feature/identity-module` | `/api/v1/did` | Ed25519 key generation, W3C DID Core 1.0 `did:mesh:key` derivation, document resolution, signature verification, and ledger anchoring. |
-| **Module B** | WebAuthn / FIDO2 Passwordless Auth | Member 2 | `feature/webauthn-module` | `/api/v1/webauthn` | Dual-phase ceremonies (Begin / Complete), TTL-enforced nonces in `ChallengeStore`, credential registration, sign-count replay defense. |
+| **Module B** | WebAuthn / FIDO2 Passwordless Auth | Member 2 | `feature/webauthn-module` | `/api/v1/webauthn` | Native browser passkey registration/login via `/register/*` and `/login/*`; verified login creates a DID-bound core session and JWT. The `/register/begin` and `/authenticate/*` endpoints are an explicitly separate Ed25519 simulation. |
 | **Module C** | Simulated Blockchain Ledger | Member 4 | `midhun` | `/api/v1/ledger` | SHA-256 hash-chained block records (`Genesis` $\to$ `Create` $\to$ `Update` $\to$ `Deactivate`), tamper detection via `verify_integrity()`, optional JSON file persistence. |
 | **Module D** | Admin Dashboard API | Member 6 | `feature/admin-dashboard` | `/api/v1/admin` | Aggregate stats, real-time cryptographic audit, emergency token revocation, tamper simulation endpoint. |
 | **Module E** | JWT Access Tokens & Zero-Trust Engine | Member 5 | `member5` | `/api/v1/tokens` | Short-lived asymmetric JWT issuance (EdDSA / Ed25519), Redis/in-memory JTI revocation deny-list, 5-stage Zero-Trust verification gate. |
@@ -101,6 +101,20 @@ Browser Dashboard ──> FastAPI Application (:8000)
 ---
 
 ## Quickstart
+
+Security audit events are stored in SQLite at `data/security_events.sqlite3`
+by default. Set `AUDIT_DB_PATH` to choose another database file. Events use
+pseudonymous DID references and omit full JWTs, token identifiers, secrets, and
+credential material. Administrators can browse them at `/api/v1/admin/events`.
+
+### Administrator access
+
+Set `IDP_ADMIN_DIDS` to a comma-separated list of administrator DIDs before
+starting the API, for example `IDP_ADMIN_DIDS=did:mesh:key:...`. After an
+administrator completes the authentication ceremony and requests a token, the
+server assigns that token the admin role. Send it as a bearer token to
+`/api/v1/admin/*`. Client-supplied role claims are ignored. Admin endpoints
+return 401 without a valid token and 403 for regular-user tokens.
 
 ### 1. Install Dependencies
 
