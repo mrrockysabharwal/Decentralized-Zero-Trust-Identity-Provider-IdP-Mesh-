@@ -31,3 +31,5 @@ Thumbs.db
 # Data & local runtime artifacts
 data/*.json
 !data/.gitkeep
+backend/*.sqlite3
+backend/**/*.sqlite3

@@ -20,6 +20,7 @@ from app.modules.ledger.hasher import (
 from app.modules.ledger.chain import SimulatedLedger
 from app.modules.ledger.router import router as ledger_router
 
+
 __all__ = [
     "LedgerRecord",
     "LedgerOperation",

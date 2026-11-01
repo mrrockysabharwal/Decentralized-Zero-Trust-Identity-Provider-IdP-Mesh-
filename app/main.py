@@ -44,6 +44,15 @@ from fastapi.staticfiles import StaticFiles
 # ── Load .env before any env-var reads ───────────────────────────────────────
 load_dotenv()
 
+from backend.main import (
+    init_db as init_shad_db,
+    passkey_router as shad_passkey_router,
+    shad_data_router,
+    shad_oidc_router,
+    sync_credentials_to_core,
+    ui_router as shad_ui_router,
+)
+
 # ── Module C (Member 4) — Simulated Blockchain Ledger ────────────────────────
 from app.modules.ledger import (
     SimulatedLedger,
@@ -142,8 +151,11 @@ def _wire_shared_ledger() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle handler."""
+    init_shad_db()
     # ── Startup ───────────────────────────────────────────────────────────────
     _wire_shared_ledger()
+    synced_credentials = sync_credentials_to_core()
+    logger.info("Shad passkeys connected to core credential store: %d", synced_credentials)
 
     logger.info("=" * 65)
     logger.info("  Decentralized Zero-Trust IdP Mesh — starting up")
@@ -229,6 +241,12 @@ app.include_router(admin_router, prefix="/api/v1")
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend" / "dashboard"
 if _frontend_dir.exists():
     app.mount("/dashboard", StaticFiles(directory=str(_frontend_dir), html=True), name="dashboard")
+
+# Shad's passwordless login site and API share the admin app's server.
+app.include_router(shad_ui_router, prefix="/shad")
+app.include_router(shad_passkey_router, prefix="/api/v1")
+app.include_router(shad_data_router, prefix="/api/v1")
+app.include_router(shad_oidc_router, prefix="/api/v1")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

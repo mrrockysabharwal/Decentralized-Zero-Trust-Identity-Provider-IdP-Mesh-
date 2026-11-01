@@ -167,7 +167,10 @@ class CredentialInfo(BaseModel):
     credential_id: str = Field(description="Unique credential identifier.")
     did: str = Field(description="DID this credential is bound to.")
     public_key_b64: str = Field(
-        description="Base64url-encoded public key (32 raw bytes)."
+        description=(
+            "Base64url-encoded public key material. The format depends on the "
+            "credential source in device_info."
+        )
     )
     registered_at: str = Field(description="ISO 8601 UTC timestamp of registration.")
     device_info: Optional[Dict[str, Any]] = Field(

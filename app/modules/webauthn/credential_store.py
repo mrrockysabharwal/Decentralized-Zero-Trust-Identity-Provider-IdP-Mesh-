@@ -35,7 +35,7 @@ class StoredCredential:
 
     credential_id: str
     did: str
-    public_key_bytes: bytes      # Raw 32-byte Ed25519 public key
+    public_key_bytes: bytes      # Public key bytes; encoding depends on device_info/source
     registered_at: str           # ISO 8601 UTC
     device_info: Optional[dict] = None
     sign_count: int = 0          # Monotonically increasing auth counter
@@ -75,6 +75,7 @@ class CredentialStore:
         public_key_bytes: bytes,
         credential_id: Optional[str] = None,
         device_info: Optional[dict] = None,
+        sign_count: int = 0,
     ) -> StoredCredential:
         """Store a new credential binding a public key to a DID.
 
@@ -83,7 +84,8 @@ class CredentialStore:
         did:
             The DID to bind this credential to.
         public_key_bytes:
-            Raw 32-byte Ed25519 public key.
+            Public key bytes. Core simulated credentials use raw Ed25519 keys;
+            native passkeys may use their WebAuthn/COSE encoding.
         credential_id:
             Optional explicit ID. Derived from the public key if not supplied.
         device_info:
@@ -115,7 +117,7 @@ class CredentialStore:
                 public_key_bytes=public_key_bytes,
                 registered_at=now_iso,
                 device_info=device_info,
-                sign_count=0,
+                sign_count=sign_count,
             )
             self._credentials[cred_id] = cred
             self._did_index.setdefault(did, []).append(cred_id)

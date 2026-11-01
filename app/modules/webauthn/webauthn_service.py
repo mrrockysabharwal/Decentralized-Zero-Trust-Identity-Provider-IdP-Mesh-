@@ -247,7 +247,12 @@ class WebAuthnService:
         """
         _validate_did(did)
 
-        creds = self._credentials.list_credentials_for_did(did)
+        creds = [
+            credential
+            for credential in self._credentials.list_credentials_for_did(did)
+            if not credential.device_info
+            or credential.device_info.get("source") != "shad-passkey"
+        ]
         if not creds:
             raise ValueError(
                 f"No credentials registered for DID '{did}'. "
