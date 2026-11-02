@@ -256,6 +256,20 @@ async def login_page_alias() -> RedirectResponse:
     return RedirectResponse(url="/shad/login.html", status_code=307)
 
 
+@app.get("/register", include_in_schema=False)
+@app.get("/register.html", include_in_schema=False)
+async def registration_page_alias() -> RedirectResponse:
+    """Convenient aliases for the passkey account creation page."""
+    return RedirectResponse(url="/shad/register.html", status_code=307)
+
+
+@app.get("/account", include_in_schema=False)
+@app.get("/account.html", include_in_schema=False)
+async def account_page_alias() -> RedirectResponse:
+    """Convenient alias for the authenticated user's account page."""
+    return RedirectResponse(url="/shad/account.html", status_code=307)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Utility Endpoints (Member 1)
 # ─────────────────────────────────────────────────────────────────────────────

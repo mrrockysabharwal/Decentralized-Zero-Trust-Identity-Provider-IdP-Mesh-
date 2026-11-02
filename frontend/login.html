@@ -111,7 +111,7 @@
                         class="login-button"
                         id="registerPasskey">
 
-                        Register Passkey <span>→</span>
+                        Create an account <span>→</span>
 
                     </button>
 
@@ -148,7 +148,7 @@
 
                 <p class="register-text">
                     Don't have an account?
-                    <a href="#registerPasskey">Create account</a>
+                    <a href="/register">Create account</a>
                 </p>
 
 
@@ -197,7 +197,7 @@
 
             registerButton.innerHTML = loading
                 ? "Please wait..."
-                : 'Register Passkey <span>→</span>';
+                : 'Create an account <span>→</span>';
 
             loginButton.textContent = loading
                 ? "Authenticating..."
@@ -332,111 +332,11 @@
         }
 
 
-        // REGISTER A PASSKEY
-        registerButton.addEventListener("click", async function () {
-            const username = getUsername();
-
-            if (!username) {
-                return;
-            }
-
-            setLoading(true);
-
-            try {
-                checkPasskeySupport();
-
-                showMessage(
-                    "Preparing secure passkey registration..."
-                );
-
-                /*
-                 * Expected backend response:
-                 * PublicKeyCredentialCreationOptions
-                 * with Base64URL-encoded challenge and user.id.
-                 */
-                const options = await sendRequest(
-                    "/api/v1/webauthn/register/options",
-                    { username }
-                );
-
-                if (!options.challenge || !options.user?.id) {
-                    throw new Error(
-                        "The server returned invalid registration options."
-                    );
-                }
-
-                options.challenge =
-                    base64urlToBytes(options.challenge);
-
-                options.user.id =
-                    base64urlToBytes(options.user.id);
-
-                if (options.excludeCredentials) {
-                    options.excludeCredentials =
-                        options.excludeCredentials.map(item => ({
-                            ...item,
-                            id: base64urlToBytes(item.id)
-                        }));
-                }
-
-                const credential =
-                    await navigator.credentials.create({
-                        publicKey: options
-                    });
-
-                if (!credential) {
-                    throw new Error(
-                        "Passkey registration was not completed."
-                    );
-                }
-
-                const result = await sendRequest(
-                    "/api/v1/webauthn/register/verify",
-                    {
-                        username,
-
-                        credential: {
-                            id: credential.id,
-
-                            rawId: bytesToBase64url(
-                                credential.rawId
-                            ),
-
-                            type: credential.type,
-
-                            response: {
-                                clientDataJSON:
-                                    bytesToBase64url(
-                                        credential.response.clientDataJSON
-                                    ),
-
-                                attestationObject:
-                                    bytesToBase64url(
-                                        credential.response.attestationObject
-                                    ),
-
-                                transports:
-                                    credential.response.getTransports
-                                        ? credential.response.getTransports()
-                                        : []
-                            }
-                        }
-                    }
-                );
-
-                showMessage(
-                    result.message ||
-                    "Passkey registered successfully.",
-                    "success"
-                );
-
-            } catch (error) {
-                handleError(error);
-
-            } finally {
-                setLoading(false);
-            }
+        // Account creation has its own focused page.
+        registerButton.addEventListener("click", function () {
+            window.location.href = "/register";
         });
+
 
 
         // LOG IN USING A PASSKEY
@@ -538,6 +438,15 @@
                 if (result.access_token) {
                     sessionStorage.setItem("idp_access_token", result.access_token);
                     sessionStorage.setItem("idp_authenticated_did", result.did);
+                    sessionStorage.setItem("idp_access_token_jti", result.jti || "");
+                    sessionStorage.setItem(
+                        "idp_access_token_expires_at",
+                        String(Date.now() + (result.expires_in || 0) * 1000)
+                    );
+                    sessionStorage.setItem(
+                        "idp_access_token_scope",
+                        JSON.stringify(result.scope || ["read:profile"])
+                    );
                 }
                 if (result.session_token) {
                     sessionStorage.setItem("idp_auth_session", result.session_token);
@@ -549,9 +458,7 @@
                     "success"
                 );
 
-                if (result.redirectUrl) {
-                    window.location.href = result.redirectUrl;
-                }
+                window.location.assign(result.redirectUrl || "/account");
 
             } catch (error) {
                 handleError(error);

@@ -577,6 +577,16 @@ def login_page():
     return frontend_file("login.html")
 
 
+@ui_router.get("/register.html", include_in_schema=False)
+def registration_page():
+    return frontend_file("register.html")
+
+
+@ui_router.get("/account.html", include_in_schema=False)
+def account_page():
+    return frontend_file("account.html")
+
+
 @ui_router.get("/style.css", include_in_schema=False)
 def homepage_stylesheet():
     return frontend_file("style.css")
@@ -585,6 +595,16 @@ def homepage_stylesheet():
 @ui_router.get("/login.css", include_in_schema=False)
 def login_stylesheet():
     return frontend_file("login.css")
+
+
+@ui_router.get("/account.css", include_in_schema=False)
+def account_stylesheet():
+    return frontend_file("account.css")
+
+
+@ui_router.get("/account.js", include_in_schema=False)
+def account_script():
+    return frontend_file("account.js")
 
 
 @ui_router.get("/webauthn.js", include_in_schema=False)
@@ -655,6 +675,12 @@ def resolve_did(did: str):
 def registration_options(body: UserRequest):
     username = normalize_username(body.username)
     user = get_user(username)
+
+    if user is not None and get_credentials(username):
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists for this username. Log in instead.",
+        )
 
     if user is None:
         user_handle = secrets.token_bytes(32)
@@ -932,8 +958,10 @@ def authentication_verify(body: AuthenticationVerifyRequest):
         "session_token": session_token,
         "session_expires_in": session_ttl,
         "access_token": access_token.access_token,
+        "jti": access_token.jti,
         "token_type": access_token.token_type,
         "expires_in": access_token.expires_in,
+        "scope": access_token.scope,
         "message": "Passwordless login successful. A Midhun API access token was issued.",
     }
 

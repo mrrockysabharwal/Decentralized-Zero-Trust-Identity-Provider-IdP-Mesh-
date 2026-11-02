@@ -10,7 +10,7 @@ The frontend is a framework-free administration dashboard for the Decentralized 
 
 ## Dashboard sections
 
-- **Passkey login:** `/login` serves the browser's native WebAuthn/FIDO2 registration and login flow. A verified passkey login creates the DID-bound core session and access JWT.
+- **Passkey login:** `/login` serves browser-native WebAuthn/FIDO2 login. `/register` creates an account and its first passkey. A verified passkey login creates the DID-bound core session and access JWT.
 
 - **Overview:** ledger record count and integrity, latest ledger activity, identity count derived from ledger records, and service health.
 - **Identities:** latest state per DID derived from the ledger. This is not a separate identity registry.
@@ -31,4 +31,4 @@ Open `http://localhost:3000/frontend/dashboard/`. For live data, run the FastAPI
 
 The dashboard refreshes every 30 seconds and has a manual refresh control. If all API routes are unavailable, it shows an unavailable state; it does not present demo telemetry as real data. No frontend framework or additional UI dependency is required.
 
-The login experience is served by the backend at `http://localhost:8000/shad/login.html` (also available at `/login` and `/login.html`). The landing page is at `http://localhost:8000/shad/`.
+The login experience is served at `http://localhost:8000/shad/login.html` (also available at `/login` and `/login.html`). Account creation is at `/register` and uses a passkey; the username becomes the account identifier. Successful login opens `/account`, which confirms the DID and checks access to the protected profile endpoint. The landing page is at `http://localhost:8000/shad/`.

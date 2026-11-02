@@ -6,13 +6,19 @@ Copy `.env.example` to `.env`, then start the stack:
 
 ```powershell
 Copy-Item .env.example .env
+python traefik/generate-local-cert.py
+certutil -user -addstore Root traefik/certs/dev-root-ca.crt
 docker compose up --build -d
 ```
 
 Open `https://localhost/` or `https://localhost/dashboard/`. Traefik redirects HTTP
-to HTTPS. Its local default certificate is self-signed, so the browser will show a
-certificate warning. For local browser passkey testing, accept the certificate
-warning first. The API's Swagger UI is at `https://localhost/docs`.
+to HTTPS and serves the generated local certificate. Restart the browser after trusting
+the certificate if it was already open. The API's Swagger UI is at `https://localhost/docs`.
+
+Create a passkey account at `https://localhost/register`; sign in at
+`https://localhost/login`. Successful login opens `https://localhost/account`, where the
+app confirms the DID and checks the token against a protected profile endpoint. The
+username is the account identifier; there is no password-based registration.
 
 The `idp_data` volume stores the ledger, audit events, passkey account database, public
 DID documents, and JWT signing keys. The `redis_data` volume stores the token revocation deny-list.
@@ -21,9 +27,11 @@ persistent data.
 
 ## Configuration
 
-Set `IDP_HOST`, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `ALLOWED_ORIGINS` in `.env`
-to the public hostname and HTTPS origin before deployment. Set `IDP_ADMIN_DIDS` to
-the comma-separated administrator DIDs. Keep `.env` and signing keys private.
+The generated certificate is for local development only. Before deployment, change the
+`Host` rules in `traefik/dynamic.yml` and set
+`WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `ALLOWED_ORIGINS` in `.env` for the public
+hostname and HTTPS origin. Set `IDP_ADMIN_DIDS` to the comma-separated administrator
+DIDs. Keep `.env` and signing keys private.
 
 The provided TLS certificate is for local development. Configure a trusted
 certificate resolver or mount a managed certificate at the production proxy before

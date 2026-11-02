@@ -1,0 +1,32 @@
+http:
+  routers:
+    idp-http:
+      rule: "Host(`localhost`)"
+      entryPoints:
+        - web
+      middlewares:
+        - idp-https-redirect
+      service: idp
+
+    idp-https:
+      rule: "Host(`localhost`)"
+      entryPoints:
+        - websecure
+      tls: {}
+      service: idp
+
+  middlewares:
+    idp-https-redirect:
+      redirectScheme:
+        scheme: https
+
+  services:
+    idp:
+      loadBalancer:
+        servers:
+          - url: "http://api:8000"
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/dev-localhost.crt
+      keyFile: /etc/traefik/certs/dev-localhost-key.pem

@@ -25,19 +25,25 @@ checks are implemented; earlier API-contract statements that these routes return
 - DID registry write/reload check passed with a temporary data file.
 - Compose YAML parsed successfully and contains the API, Redis, and Traefik services.
 - `git diff --check` passed.
-- Docker Desktop has been installed. WSL and Virtual Machine Platform are enabled but
-  require a Windows restart before the Linux engine is available; image build and Compose
-  runtime validation remain pending that restart.
+- Docker Desktop Linux engine is available. `docker compose up --build -d` built the API
+  image and started API, Redis, and Traefik. API and Redis report healthy. HTTPS health,
+  login, signup-page, dashboard, and HTTP-to-HTTPS routes all return successfully. The
+  browser WebAuthn registration and login ceremonies still need to be exercised.
+  Traefik now uses a file provider to route to the API without a Docker socket mount.
+- Added a dedicated `/register` passkey account-creation page. Registration rejects
+  usernames that already have a passkey, preventing unauthenticated extra-credential
+  enrollment; unfinished accounts with no credential can retry.
+- Successful passkey login now opens `/account`, which shows the authenticated DID,
+  token scope/expiry, and the result of calling the protected profile API. Sign-out
+  revokes the user's own token.
 
 ## Remaining phases
 
-1. **Validate the container runtime:** build the image and validate Compose once Docker is
-   available.
-2. **Exercise the full deployed flow:** test passkey login, token issuance and revocation,
-   admin access, health reporting, and persistence across restarts.
-3. **Prepare production TLS and host configuration:** install a trusted certificate and
+1. **Exercise the full deployed flow:** complete browser passkey registration and login,
+   token issuance and revocation, admin access, and persistence checks across restarts.
+2. **Prepare production TLS and host configuration:** install a trusted certificate and
    set the public hostname, WebAuthn RP ID/origin, CORS origins, and administrator DIDs.
-4. **Share ephemeral state before scaling:** authentication sessions and WebAuthn
+3. **Share ephemeral state before scaling:** authentication sessions and WebAuthn
    challenges are in process memory. Use shared state before adding API
    workers or replicas. The current Compose deployment runs one API process.
 

@@ -1,12 +1,14 @@
 # Traefik and TLS
 
-Docker Compose routes `https://localhost` to the API through Traefik's `websecure`
-entrypoint. Traefik uses its built-in self-signed certificate when no certificate
-resolver is configured. Browsers will show a certificate warning; this is for local
-development only.
+The Compose stack routes `https://localhost` to the API through Traefik. For local
+development, generate a local CA and localhost certificate with
+`python traefik/generate-local-cert.py`, then trust `traefik/certs/dev-root-ca.crt` in
+the current Windows user's root store with
+`certutil -user -addstore Root traefik/certs/dev-root-ca.crt`. The private keys stay in
+the ignored `traefik/certs/` directory; only the localhost certificate and its key are
+mounted read-only into Traefik.
 
-For deployment, terminate TLS with a certificate trusted by clients. Configure a
-Traefik certificate resolver or mount a managed certificate, set `IDP_HOST`,
-`WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `ALLOWED_ORIGINS` in `.env` to the public
-hostname/origin, and restrict network access to the exposed proxy ports. Keep the
-Docker socket mount read-only and protect the Docker host.
+The development certificate is only for this machine and hostname. For deployment,
+mount a certificate trusted by clients, update the `Host` rules in `dynamic.yml`, and
+set `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `ALLOWED_ORIGINS` in `.env` to match the
+public hostname and origin.

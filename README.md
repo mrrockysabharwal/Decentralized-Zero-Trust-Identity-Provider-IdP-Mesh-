@@ -154,9 +154,11 @@ Compose:
 
 ```powershell
 Copy-Item .env.example .env
+python traefik/generate-local-cert.py
+certutil -user -addstore Root traefik/certs/dev-root-ca.crt
 docker compose up --build -d
 ```
 
-Open `https://localhost/` or `https://localhost/dashboard/`. Local Traefik uses a
-self-signed certificate, so the browser will show a warning. The full configuration
+Open `https://localhost/` or `https://localhost/dashboard/`. The certificate is
+trusted only on the Windows user account where it was installed. The full configuration
 and production requirements are in [docs/deployment.md](docs/deployment.md).
