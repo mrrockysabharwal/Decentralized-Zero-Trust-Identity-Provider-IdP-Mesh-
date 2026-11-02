@@ -3,8 +3,12 @@ from typing import Optional
 from backend.oidc.service import (
     generate_authorization_code,
     validate_client_redirect_uri,
-    create_authorization_transaction,
+    consume_authorization_code,
+    create_access_token,
+    validate_access_token,
 )
+
+from backend.oidc.schemas import TokenRequest, TokenResponse
 from fastapi.responses import RedirectResponse
 from urllib.parse import urlencode
 
@@ -69,15 +73,44 @@ async def authorize(
 
 
 # 3. Token Exchange Endpoint
-@router.post("/token")
-async def token_exchange():
-    # Validate the client and authorization code,
-    # then issue properly signed tokens.
-    raise HTTPException(
-        status_code=501,
-        detail="Token exchange is not implemented yet",
+@router.post("/token", response_model=TokenResponse)
+async def token_exchange(body: TokenRequest):
+
+    if body.grant_type != "authorization_code":
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported grant_type",
+        )
+
+    if not validate_client_redirect_uri(
+        body.client_id,
+        body.redirect_uri,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid client_id or redirect_uri",
+        )
+
+    result = consume_authorization_code(
+        code=body.code,
+        client_id=body.client_id,
+        redirect_uri=body.redirect_uri,
+        code_verifier=body.code_verifier,
     )
 
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid, expired, reused, or PKCE-mismatched authorization code",
+        )
+
+    token = create_access_token(
+        username=result["username"],
+        client_id=result["client_id"],
+        scope=result["scope"],
+    )
+
+    return token
 
 # 4. UserInfo Endpoint
 @router.get("/userinfo")
@@ -87,13 +120,22 @@ async def userinfo(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401,
-            detail="A Bearer access token is required",
+            detail="A valid Bearer access token is required",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Validate the access token and retrieve the
-    # authenticated user's claims before returning them.
-    raise HTTPException(
-        status_code=501,
-        detail="Access-token validation is not implemented yet",
-    )
+    access_token = authorization.split(" ", 1)[1].strip()
+
+    user = validate_access_token(access_token)
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return {
+        "sub": user["username"],
+        "preferred_username": user["username"],
+    }

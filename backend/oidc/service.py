@@ -396,3 +396,80 @@ def get_authorization_transaction(transaction_id: str):
         "code_challenge": row["code_challenge"],
         "code_challenge_method": row["code_challenge_method"],
     }
+ACCESS_TOKEN_TTL_SECONDS = 3600
+
+
+def initialize_token_table():
+    initialize_database()
+
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS access_tokens (
+                token_hash TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
+
+def create_access_token(username: str, client_id: str, scope: str) -> dict:
+    if not username or not client_id or not scope:
+        raise ValueError("Missing token details.")
+
+    initialize_token_table()
+
+    token = secrets.token_urlsafe(32)
+    token_hash = hash_code(token)
+    expires_at = (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS)
+    ).isoformat()
+
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO access_tokens
+            (token_hash, username, client_id, scope, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (token_hash, username, client_id, scope, expires_at))
+
+    return {
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        "scope": scope,
+    }
+
+
+def validate_access_token(token: str):
+    if not token:
+        return None
+
+    initialize_token_table()
+
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT username, client_id, scope, expires_at
+            FROM access_tokens
+            WHERE token_hash = ?
+        """, (hash_code(token),)).fetchone()
+
+    if row is None:
+        return None
+
+    expires_at = datetime.fromisoformat(row["expires_at"])
+
+    if expires_at <= datetime.now(timezone.utc):
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM access_tokens WHERE token_hash = ?",
+                (hash_code(token),)
+            )
+        return None
+
+    return {
+        "username": row["username"],
+        "client_id": row["client_id"],
+        "scope": row["scope"],
+    }
