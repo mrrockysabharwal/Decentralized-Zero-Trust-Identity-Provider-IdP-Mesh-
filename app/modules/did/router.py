@@ -287,8 +287,9 @@ def update_did(did: str, payload: DIDUpdateRequest) -> DIDUpdateResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     # Overwrite registry entry with updated document
-    from app.modules.identity.did_service import _did_registry
+    from app.modules.identity.did_service import _did_registry, persist_registry
     _did_registry[did] = updated_doc
+    persist_registry()
     logger.info("Updated DID document for: %s", did)
 
     # Anchor UPDATE on ledger

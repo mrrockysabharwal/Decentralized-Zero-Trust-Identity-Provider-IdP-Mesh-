@@ -9,6 +9,7 @@ Provides endpoints for:
 """
 
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
@@ -24,11 +25,13 @@ from app.modules.ledger.models import (
 router = APIRouter(prefix="/ledger", tags=["Simulated Ledger"])
 
 # Shared singleton instance (can be overridden via dependency injection)
-from pathlib import Path
-
-LEDGER_STORAGE_PATH = (
-    Path(__file__).resolve().parents[3] / "data" / "ledger.json"
+LEDGER_STORAGE_PATH = Path(
+    os.environ.get(
+        "LEDGER_STORAGE_PATH",
+        str(Path(__file__).resolve().parents[3] / "data" / "ledger.json"),
+    )
 )
+LEDGER_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 ledger_instance = SimulatedLedger(
     auto_genesis=True,

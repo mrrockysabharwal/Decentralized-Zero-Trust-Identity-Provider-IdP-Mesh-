@@ -398,9 +398,10 @@ def sync_did_document(username: str, did: str) -> str:
         )
 
     # Keep the core DID API's in-process registry in step with persisted Shad DIDs.
-    from app.modules.identity.did_service import _did_registry
+    from app.modules.identity.did_service import _did_registry, persist_registry
 
     _did_registry[did] = document
+    persist_registry()
 
     ledger = get_ledger()
     latest = ledger.get_latest_record(did)

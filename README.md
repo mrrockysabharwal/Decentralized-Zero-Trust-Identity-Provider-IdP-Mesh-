@@ -141,8 +141,22 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Running the Test Suite
 
-Run the full pytest suite (289 tests across unit, integration, and security checks):
+Run the full pytest suite (304 tests and 4 subtests at the last validation):
 
 ```powershell
 pytest
 ```
+
+## Container deployment
+
+For the local API, Redis, and Traefik stack, copy the environment template and start
+Compose:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build -d
+```
+
+Open `https://localhost/` or `https://localhost/dashboard/`. Local Traefik uses a
+self-signed certificate, so the browser will show a warning. The full configuration
+and production requirements are in [docs/deployment.md](docs/deployment.md).

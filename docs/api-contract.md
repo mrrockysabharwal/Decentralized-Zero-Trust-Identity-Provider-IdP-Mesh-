@@ -1,6 +1,11 @@
 # Member 6 — Dashboard API Contract
 **Date:** 2026-10-14
 **Author:** Member 6 (Dashboard, Testing and Deployment)
+
+> **Status note (2026-11-02):** This proposed contract includes historical
+> `/dashboard/*` paths. The implemented admin API is mounted at `/api/v1/admin/*`;
+> token issuance and revocation authorization are implemented. See the current
+> routers and [implementation status](implementation-plan.md) for runtime behavior.
 **Status:** Proposed — requires team review and approval
 
 This document defines the API contract the administrative dashboard will consume.
@@ -220,7 +225,7 @@ currently implemented.
 }
 ```
 
-**Status:** Route present; operation currently unavailable pending verified-principal authentication.
+**Status (2026-11-02):** Implemented. A valid short-lived server-side authentication session is required, and the requested DID must match the verified principal.
 
 ---
 
@@ -294,7 +299,7 @@ the deny-list after verifying that the caller is authorized to revoke it.
 }
 ```
 
-**Status:** Route present; operation currently unavailable pending token-ownership authorization.
+**Status (2026-11-02):** Implemented. The caller must present a valid access JWT and may revoke only the JTI in that token.
 
 ---
 
@@ -553,16 +558,20 @@ class SecurityEvent(BaseModel):
 
 ## 6. Integration Dependencies from Other Members
 
+This table preserves the original integration plan. Rows marked `MISSING`, `PENDING`,
+or `UNAVAILABLE` describe that earlier snapshot and are superseded by current source
+and the [implementation status](implementation-plan.md).
+
 | Dependency | Member | Required for | Interface needed | Status |
 |---|---|---|---|---|
-| `app/main.py` with router mounting | Member 1 | Central API entry point | `app.include_router(ledger_router, prefix="/api/v1")`, `app.include_router(tokens_router, prefix="/api/v1")` | MISSING (Member 1) |
-| Security event store | Members 2 and 5 | `GET /api/v1/dashboard/events` | Queryable audit store (SQLite / Redis / append-log) | MISSING (Members 2 & 5) |
+| `app/main.py` with router mounting | Member 1 | Central API entry point | Routers mounted under `/api/v1` | IMPLEMENTED |
+| Security event store | Members 2 and 5 | `GET /api/v1/admin/events` | SQLite-backed queryable audit store | IMPLEMENTED |
 | JWT verification utility | Member 5 | Token authentication & inspection | `verify_token(token, public_key) -> claims` & `POST /api/v1/tokens/verify` | IMPLEMENTED (Member 5) |
-| Token Revocation Store | Member 5 | JTI deny-list component | `TokenRevocationStore`; HTTP revoke route currently returns 503 pending ownership checks | COMPONENT IMPLEMENTED / ROUTE UNAVAILABLE |
-| Zero-Trust Policy Engine | Member 5 | Policy evaluation component | `ZeroTrustPolicyEngine`; HTTP issue route currently returns 503 pending verified-principal authentication | COMPONENT IMPLEMENTED / ROUTE UNAVAILABLE |
-| Admin role claim definition | Member 5 | Future role-based authorization | Define a trusted claim after authentication integration | PENDING |
-| DID count / revocation status | Members 1, 3, 4 | Summary statistics | Derived from `GET /api/v1/ledger` blocks; dedicated `GET /api/v1/identity/stats` pending | DERIVED / PENDING |
-| Composite Health check | Member 1 | Unified service health panel | `GET /api/v1/dashboard/health` or `/health` aggregating all nodes | PENDING (Member 1) |
+| Token Revocation Store | Member 5 | JTI deny-list component | `TokenRevocationStore`; caller-owned JTI revoke route | IMPLEMENTED |
+| Zero-Trust Policy Engine | Member 5 | Policy evaluation component | `ZeroTrustPolicyEngine`; verified-session token issue route | IMPLEMENTED |
+| Admin role claim definition | Member 5 | Role-based authorization | Server assigns role from `IDP_ADMIN_DIDS` | IMPLEMENTED |
+| DID count / revocation status | Members 1, 3, 4 | Summary statistics | Derived from the shared ledger | IMPLEMENTED (derived) |
+| Composite Health check | Member 1 | Unified service health panel | `/health` and `/api/v1/admin/health` | IMPLEMENTED |
 | Redis connection config | Member 5 | Revocation store | `REDIS_URL` env variable (in-memory fallback active) | CONFIGURED |
 
 ---

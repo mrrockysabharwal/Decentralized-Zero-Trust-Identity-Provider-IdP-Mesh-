@@ -28,8 +28,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
+import os
+import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -64,6 +68,41 @@ class DIDResolutionError(Exception):
 # Maps did → DID Document dict.  Intentionally module-level so it persists
 # for the lifetime of the process (test isolation handled via registry_reset).
 _did_registry: Dict[str, Dict[str, Any]] = {}
+_registry_lock = threading.RLock()
+_registry_path = os.environ.get("DID_REGISTRY_PATH")
+
+
+def persist_registry() -> None:
+    """Persist public DID documents when a registry path is configured."""
+    if not _registry_path:
+        return
+    target = Path(_registry_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    with _registry_lock:
+        temporary.write_text(
+            json.dumps(_did_registry, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+
+
+def _load_registry() -> None:
+    if not _registry_path:
+        return
+    target = Path(_registry_path)
+    if not target.exists():
+        return
+    documents = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(documents, dict) or any(
+        not isinstance(did, str) or not isinstance(doc, dict) or doc.get("id") != did
+        for did, doc in documents.items()
+    ):
+        raise ValueError(f"Invalid DID registry file: {target}")
+    _did_registry.update(documents)
+
+
+_load_registry()
 
 
 # ---------------------------------------------------------------------------
@@ -188,12 +227,14 @@ class DIDService:
         identifier = DIDService._derive_did_identifier(public_key)
         did = f"did:{DID_METHOD}:key:{identifier}"
 
-        if did in _did_registry:
-            logger.debug("DID %s already exists — returning existing entry.", did)
-            return did
+        with _registry_lock:
+            if did in _did_registry:
+                logger.debug("DID %s already exists — returning existing entry.", did)
+                return did
 
-        doc = DIDService.build_did_document(did, public_key)
-        _did_registry[did] = doc
+            doc = DIDService.build_did_document(did, public_key)
+            _did_registry[did] = doc
+            persist_registry()
         logger.info("Created DID: %s", did)
         return did
 
@@ -332,6 +373,7 @@ class DIDService:
         doc = _did_registry[did]
         doc["deactivated"] = True
         doc["updated"] = datetime.now(timezone.utc).isoformat()
+        persist_registry()
         logger.info("Deactivated DID: %s", did)
 
     @staticmethod
@@ -342,4 +384,5 @@ class DIDService:
         erase all registered DIDs for the lifetime of the process.
         """
         _did_registry.clear()
+        persist_registry()
         logger.warning("DID registry has been reset (all entries cleared).")
