@@ -37,10 +37,28 @@ checks are implemented; earlier API-contract statements that these routes return
   token scope/expiry, and the result of calling the protected profile API. Sign-out
   revokes the user's own token.
 
+## Deployed-flow validation (2026-11-03)
+
+- Rebuilt and started the Compose stack. API and Redis reported healthy; HTTPS health,
+  registration, login, and dashboard routes returned 200, and HTTP redirected to HTTPS.
+- Completed browser passkey registration and login in headless Chromium with a virtual
+  authenticator. Token issuance and the protected profile call succeeded. Self-revocation
+  succeeded, and verification rejected the revoked token.
+- A regular-user token was denied by the admin API (403); an unauthenticated request was
+  denied (401). No administrator DID is configured in this deployment, so successful
+  administrator access remains unverified.
+- Restarted the full Compose stack. The passkey account and credential remained in the
+  WebAuthn database; DID resolution and ledger history still succeeded. The JWT signing
+  key remained in the data volume. The Redis revocation entry survived the restart, and
+  the revoked token remained invalid afterward.
+- The post-restart passkey credential row was confirmed in storage, but the virtual
+  authenticator itself was scoped to its browser debugging session and was not available
+  for another assertion after that session ended.
+
 ## Remaining phases
 
-1. **Exercise the full deployed flow:** complete browser passkey registration and login,
-   token issuance and revocation, admin access, and persistence checks across restarts.
+1. **Finish administrator flow validation:** configure an administrator DID in the
+   test deployment and confirm that its authenticated token can access admin routes.
 2. **Prepare production TLS and host configuration:** install a trusted certificate and
    set the public hostname, WebAuthn RP ID/origin, CORS origins, and administrator DIDs.
 3. **Share ephemeral state before scaling:** authentication sessions and WebAuthn
