@@ -17,7 +17,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+
 import cbor2
+from datetime import datetime, timedelta, timezone
+from fastapi import Response
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -157,6 +160,13 @@ def init_db():
                 document_json TEXT NOT NULL,
                 doc_hash TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS login_sessions (
+                session_token_hash TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                FOREIGN KEY(username) REFERENCES users(username)
             );
             """
         )
@@ -797,7 +807,10 @@ def authentication_options(body: UserRequest):
 # --------------------------------------------------
 
 @app.post("/webauthn/login/verify")
-def authentication_verify(body: AuthenticationVerifyRequest):
+def authentication_verify(
+    body: AuthenticationVerifyRequest,
+    response: Response,
+):
     username = normalize_username(body.username)
 
     credential_id_value = (
@@ -820,6 +833,7 @@ def authentication_verify(body: AuthenticationVerifyRequest):
             """,
             (credential_id_value, username),
         ).fetchone()
+    
 
     if stored is None:
         raise HTTPException(
@@ -857,6 +871,34 @@ def authentication_verify(body: AuthenticationVerifyRequest):
                 credential_id_value,
             ),
         )
+        # Create a short-lived authenticated session
+    session_token = secrets.token_urlsafe(32)
+
+    session_token_hash = hashlib.sha256(
+        session_token.encode("utf-8")
+    ).hexdigest()
+
+    session_expires_at = int(time.time()) + 900
+
+    with db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO login_sessions
+            (session_token_hash, username, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (session_token_hash, username, session_expires_at),
+        )
+
+    response.set_cookie(
+        key="tm_login_session",
+        value=session_token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=900,
+        path="/",
+    )
 
     return {
         "authenticated": True,

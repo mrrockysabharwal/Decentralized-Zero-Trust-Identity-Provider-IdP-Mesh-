@@ -2,13 +2,14 @@ import hashlib
 import secrets
 import sqlite3
 import base64
+import time
 
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 
 # Store OIDC authorization codes separately from the existing database.
-DB_PATH = Path(__file__).resolve().parent / "oidc.sqlite3"
+DB_PATH = Path(__file__).resolve().parents[1] / "webauthn.sqlite3"
 
 CODE_TTL_SECONDS = 300
 
@@ -473,3 +474,36 @@ def validate_access_token(token: str):
         "client_id": row["client_id"],
         "scope": row["scope"],
     }
+def validate_login_session(session_token: str):
+    if not session_token:
+        return None
+
+    session_token_hash = hashlib.sha256(
+        session_token.encode("utf-8")
+    ).hexdigest()
+
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT username, expires_at
+            FROM login_sessions
+            WHERE session_token_hash = ?
+            """,
+            (session_token_hash,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    if row["expires_at"] <= int(time.time()):
+        with get_connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM login_sessions
+                WHERE session_token_hash = ?
+                """,
+                (session_token_hash,),
+            )
+        return None
+
+    return {"username": row["username"]}

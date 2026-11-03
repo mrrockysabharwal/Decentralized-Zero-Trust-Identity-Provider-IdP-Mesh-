@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Header
+from fastapi import Cookie
 from typing import Optional
 from backend.oidc.service import (
     generate_authorization_code,
@@ -6,6 +7,8 @@ from backend.oidc.service import (
     consume_authorization_code,
     create_access_token,
     validate_access_token,
+    ACCESS_TOKEN_TTL_SECONDS,
+    validate_login_session,
 )
 
 from backend.oidc.schemas import TokenRequest, TokenResponse
@@ -43,33 +46,78 @@ async def authorize(
     state: Optional[str] = Query(None),
     code_challenge: str = Query(...),
     code_challenge_method: str = Query("S256"),
+    session_token: Optional[str] = Cookie(
+        None,
+        alias="tm_login_session",
+    ),
 ):
+    # Validate response type
     if response_type != "code":
-        raise HTTPException(status_code=400, detail="Unsupported response_type")
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported response_type",
+        )
+
+    # Validate registered client and redirect URI
     if not validate_client_redirect_uri(client_id, redirect_uri):
         raise HTTPException(
-        status_code=400,
-        detail="Invalid client_id or redirect_uri",
-    )
+            status_code=400,
+            detail="Invalid client_id or redirect_uri",
+        )
 
+    # Require OpenID scope
     if "openid" not in scope.split():
-        raise HTTPException(status_code=400, detail="The openid scope is required")
+        raise HTTPException(
+            status_code=400,
+            detail="The openid scope is required",
+        )
 
+    # Validate PKCE
     if code_challenge_method != "S256":
-        raise HTTPException(status_code=400, detail="Only PKCE S256 is supported")
+        raise HTTPException(
+            status_code=400,
+            detail="Only PKCE S256 is supported",
+        )
 
-    # RFC 7636: an S256 challenge is 43 characters
-    # for a SHA-256 digest encoded using Base64URL without padding.
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
-        raise HTTPException(status_code=400, detail="Invalid PKCE code_challenge")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PKCE code_challenge",
+        )
 
-    # Do not issue a code until client registration,
-    # redirect URI validation, and user authentication exist.
-    raise HTTPException(
-        status_code=501,
-        detail="Client validation and authenticated OIDC session are not implemented yet",
+    # Validate authenticated WebAuthn session
+    user = validate_login_session(session_token)
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Please log in with your passkey first.",
+        )
+
+    # Generate authorization code
+    code = generate_authorization_code(
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        username=user["username"],
+        scope=scope,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
     )
 
+    # Redirect back to registered client
+    params = {
+        "code": code,
+    }
+
+    if state:
+        params["state"] = state
+
+    separator = "&" if "?" in redirect_uri else "?"
+
+    return RedirectResponse(
+        url=f"{redirect_uri}{separator}{urlencode(params)}",
+        status_code=302,
+    )
 
 
 # 3. Token Exchange Endpoint
@@ -101,16 +149,22 @@ async def token_exchange(body: TokenRequest):
     if result is None:
         raise HTTPException(
             status_code=400,
-            detail="Invalid, expired, reused, or PKCE-mismatched authorization code",
+            detail="Invalid, expired, reused code or failed PKCE verification",
         )
 
-    token = create_access_token(
+    access_token = create_access_token(
         username=result["username"],
         client_id=result["client_id"],
         scope=result["scope"],
     )
 
-    return token
+    return TokenResponse(
+        access_token=access_token,
+        token_type="Bearer",
+        expires_in=ACCESS_TOKEN_TTL_SECONDS,
+        id_token=None,
+        scope=result["scope"],
+    )
 
 # 4. UserInfo Endpoint
 @router.get("/userinfo")
