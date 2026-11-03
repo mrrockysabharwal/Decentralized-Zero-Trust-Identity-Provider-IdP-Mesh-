@@ -1,5 +1,7 @@
 # Module D — Admin Dashboard API
 
+> **Supplemental module note.** Current admin routes require a separately issued admin JWT, an allowlisted subject/scope, and verified Redis durability settings. The browser dashboard does not currently authenticate to these routes. See [API_DOCUMENTATION.md](API_DOCUMENTATION.md), [INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md), and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 **Author / Owner**: Member 6
 **Branch**: `feature/admin-dashboard`
 **Status**: Implemented; requires configured admin JWT and verifiable Redis revocation settings

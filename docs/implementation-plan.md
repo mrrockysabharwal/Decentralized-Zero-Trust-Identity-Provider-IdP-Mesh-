@@ -1,4 +1,6 @@
 ﻿# Member 6 — Implementation Plan
+
+> **Planning artifact, not current status.** This schedule and its proposed architecture/endpoints were written against an earlier repository snapshot. Current behavior and route contracts are in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and [API_DOCUMENTATION.md](API_DOCUMENTATION.md).
 **Date:** 2026-10-14
 **Author:** Member 6 (Dashboard, Testing and Deployment)
 **Project:** Decentralized Zero-Trust Identity Provider (IdP) Mesh

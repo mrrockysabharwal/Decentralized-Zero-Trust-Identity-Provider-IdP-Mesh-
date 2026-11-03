@@ -1,4 +1,6 @@
 ﻿# Member 6 — Architecture Audit
+
+> **Historical repository snapshot.** The file tree, branch state, dependencies, and missing-component findings below describe an earlier checkout and are no longer current. Use [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md), and the source tree for the present implementation.
 **Date:** 2026-10-14
 **Author:** Member 6 (Dashboard, Testing and Deployment)
 **Branch inspected:** `main`

@@ -1,5 +1,7 @@
 # Module B — WebAuthn / FIDO2 Passwordless Authentication
 
+> **Supplemental module note.** The `/api/v1/webauthn` flow described here is an Ed25519 challenge-response simulation, not browser WebAuthn. The current repository also mounts a separate browser WebAuthn implementation under `/webauthn`; their stores are separate, and neither login flow issues an application JWT/session. See [API_DOCUMENTATION.md](API_DOCUMENTATION.md) and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 **Author / Owner**: Member 2
 **Branch**: `feature/webauthn-module`
 **Status**: Implemented; integration and end-to-end validation remain incomplete

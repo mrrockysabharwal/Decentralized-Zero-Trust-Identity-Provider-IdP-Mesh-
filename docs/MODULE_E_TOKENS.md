@@ -1,5 +1,7 @@
 # Module E — JWT Access Token & Zero-Trust Policy Engine
 
+> **Supplemental module note.** Ordinary HTTP token issuance and revocation return `503`; admin force-revocation is a separate protected route. The current ordinary-token scopes do not include `admin:ledger`. Use [API_DOCUMENTATION.md](API_DOCUMENTATION.md) and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current contracts.
+
 **Author / Owner**: Member 5
 **Branch**: `member5`
 **Status**: JWT and policy components implemented; HTTP issuance and revocation unavailable pending authentication integration

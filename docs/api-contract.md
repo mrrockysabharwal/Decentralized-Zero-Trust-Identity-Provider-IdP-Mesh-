@@ -1,4 +1,6 @@
 # Member 6 — Dashboard API Contract
+
+> **Historical proposal, not the current API contract.** This document contains proposed routes and authentication behavior from an earlier implementation snapshot. The current FastAPI routers and actual request/response behavior are documented in [API_DOCUMENTATION.md](API_DOCUMENTATION.md); use `/docs` from a running `app.main:app` for the live OpenAPI schema.
 **Date:** 2026-10-14
 **Author:** Member 6 (Dashboard, Testing and Deployment)
 **Status:** Proposed — requires team review and approval

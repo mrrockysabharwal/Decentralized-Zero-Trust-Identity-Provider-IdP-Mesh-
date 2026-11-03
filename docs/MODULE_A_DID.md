@@ -1,5 +1,7 @@
 # Module A — DID Registry & Cryptography HTTP API
 
+> **Supplemental module note.** This document predates later route and integration changes. In particular, current DID update/deactivation APIs require controller-proof challenges, and DID storage is process-local. Use [API_DOCUMENTATION.md](API_DOCUMENTATION.md) and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current behavior.
+
 **Author / Owner**: Member 3
 **Branch**: `feature/identity-module`
 **Status**: Implemented; integration and end-to-end validation remain incomplete

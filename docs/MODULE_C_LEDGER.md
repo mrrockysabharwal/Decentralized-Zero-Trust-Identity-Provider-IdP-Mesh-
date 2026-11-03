@@ -1,5 +1,7 @@
 # Module C — Simulated Blockchain Ledger (Identity Integrity)
 
+> **Terminology note:** This is a single-process simulated hash-linked ledger, not a distributed blockchain or consensus network. For current route authorization, isolated tamper-demo behavior, and default in-memory persistence, see [API_DOCUMENTATION.md](API_DOCUMENTATION.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+
 **Author / Owner**: Member 4
 **Branch**: `midhun`
 **Status**: Fully Implemented & Tested (26 passing tests)

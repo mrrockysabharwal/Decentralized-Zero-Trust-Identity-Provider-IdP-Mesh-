@@ -1,41 +1,44 @@
-# Token issuance and revocation authorization gap
+# Token issuance and revocation integration gap
 
 ## Current behavior
 
-The token router has no authenticated caller identity to authorize. The
-application health response reports WebAuthn as
-`pending_module_integration`, and the repository contains no passkey assertion
-verifier, authenticated session store, or FastAPI dependency that supplies a
-verified DID principal. A ledger entry proves only that a DID was recorded; it
-does not prove that the current caller controls that DID.
+The repository contains a browser WebAuthn assertion verifier at
+`backend.main` routes (`POST /webauthn/login/verify`) and a separate simulated
+Ed25519 ceremony under `/api/v1/webauthn/authenticate/complete`. Neither
+implementation creates an application JWT, cookie, authenticated server
+session, or verified principal consumed by the ordinary token router.
 
-Before this change, `POST /api/v1/tokens/issue` accepted a DID from the request
-body and checked only ledger state and requested scopes. `POST
-/api/v1/tokens/revoke` accepted a caller-supplied JTI and revoked it without
-checking its owner. Neither endpoint authenticated its caller.
+The `ZeroTrustPolicyEngine` and JWT issue helper exist internally, but
+`POST /api/v1/tokens/issue` currently always returns `503` and does not run
+those checks. `POST /api/v1/tokens/revoke` likewise returns `503` until token
+ownership authorization is integrated. Token signature/claim verification,
+public-key publication, scope listing, Redis JTI storage, and separately
+authorized admin force-revocation are distinct implemented behaviors.
 
-Both endpoints now return `503 Service Unavailable` without performing the
-operation. This is a fail-closed availability measure, not an authentication
-implementation. Token verification, public-key publication, and scope listing
-remain available.
+## Integration boundary
 
-## Smallest sound next step
+The browser WebAuthn API stores users, credentials, and DID documents in
+SQLite; the DID module and simulated WebAuthn credentials use separate
+in-process stores and different DID formats. The browser login response is
+informational only. Admin authorization uses an externally issued admin JWT,
+an `ADMIN_DIDS` allowlist, and a Redis revocation store whose durability
+configuration must be verified; it is not connected to passkey login.
 
-Complete or integrate the real WebAuthn authentication module so it verifies
-assertions and returns a server-trusted principal containing the DID bound to
-the authenticated credential. Add a FastAPI dependency for that verified
-principal, then:
+## Suggested future work
 
-1. Require it on token issuance and reject any request whose target DID differs
-   from the authenticated principal's DID. Continue applying ledger and scope
-   policy after that ownership check.
-2. Require an authenticated principal on revocation and establish token
-   ownership before writing a JTI to the deny-list. For self-service
-   revocation, validate a signed, unexpired bearer token and permit only its
-   own JTI. Any cross-user or administrative revocation needs a separately
-   defined trusted role and ownership policy.
-3. Add positive tests for the real verified-principal dependency as well as
-   cross-DID issuance and revocation denial.
+1. Select one canonical credential and DID identity model and define how a
+   successful authenticator assertion maps to a server-trusted principal.
+2. Add a protected application session/principal dependency and require it
+   before token issuance; bind the requested subject to the authenticated
+   identity, then run ledger and scope policy.
+3. Design self-service revocation so an authenticated principal can revoke
+   only a verified token it owns. Keep admin revocation in its separate trust
+   domain.
+4. Add integration tests for successful authentication-to-session-to-token
+   flow and cross-identity denial.
 
-Do not treat a request-body DID, an unverified JWT payload, a ledger record,
-or a caller-supplied JTI as proof of identity or ownership.
+Do not treat a request-body DID, a ledger record, an unverified JWT payload, or
+a caller-supplied JTI as proof of identity or token ownership. For the current
+route contract and complete status table, see
+[API_DOCUMENTATION.md](API_DOCUMENTATION.md) and
+[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
