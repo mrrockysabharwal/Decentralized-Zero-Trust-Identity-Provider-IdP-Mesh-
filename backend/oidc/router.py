@@ -130,6 +130,15 @@ async def token_exchange(body: TokenRequest):
             detail="Unsupported grant_type",
         )
 
+    print("TOKEN CLIENT ID:", repr(body.client_id))
+    print("TOKEN REDIRECT URI:", repr(body.redirect_uri))
+    print(
+    "CLIENT VALIDATION:",
+    validate_client_redirect_uri(
+        body.client_id,
+        body.redirect_uri,
+    ),
+)
     if not validate_client_redirect_uri(
         body.client_id,
         body.redirect_uri,
