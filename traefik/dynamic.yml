@@ -28,5 +28,5 @@ http:
 
 tls:
   certificates:
-    - certFile: /etc/traefik/certs/dev-localhost.crt
-      keyFile: /etc/traefik/certs/dev-localhost-key.pem
+    - certFile: /etc/traefik/certs/tls.crt
+      keyFile: /etc/traefik/certs/tls.key

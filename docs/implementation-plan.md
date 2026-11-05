@@ -57,18 +57,56 @@ checks are implemented; earlier API-contract statements that these routes return
 
 ## Remaining phases
 
-1. **Finish administrator flow validation:** configure an administrator DID in the
-   test deployment and confirm that its authenticated token can access admin routes.
-2. **Prepare production TLS and host configuration:** install a trusted certificate and
-   set the public hostname, WebAuthn RP ID/origin, CORS origins, and administrator DIDs.
-3. **Share ephemeral state before scaling:** authentication sessions and WebAuthn
-   challenges are in process memory. Use shared state before adding API
-   workers or replicas. The current Compose deployment runs one API process.
+1. Configure the production hostname, trusted certificate, and administrator DID as
+   described in `docs/deployment.md` before public exposure.
+
+## Production TLS and host configuration
+
+- Compose now accepts configurable Traefik route, certificate, and private-key paths;
+  local development keeps its localhost defaults.
+- Added `traefik/render-production-config.py` to validate production hostname, matching
+  WebAuthn RP ID/origin, explicit CORS origins, administrator DID, and certificate/key
+  files. It also checks certificate hostname coverage, validity dates, and matching
+  private key before rendering a host-specific Traefik route. CA trust still depends on
+  the supplied certificate chain.
+- Documented production setup in `docs/deployment.md`. The actual public hostname,
+  trusted certificate, and administrator DID must be supplied by the deployment
+  operator before publishing the service.
+
+## Shared authentication state
+
+- Authentication sessions and WebAuthn challenges now support Redis with five-minute
+  expirations. WebAuthn challenges are consumed atomically with Redis `GETDEL`.
+- Compose selects Redis-backed state by default and waits for Redis health before API
+  startup. When `EPHEMERAL_STATE_BACKEND=redis`, Redis connection failure stops startup
+  instead of silently enabling per-process state. Direct single-process runs default
+  to memory; set the variable to `redis` to enable shared state there.
+
+## Administrator flow validation
+
+- Added and passed `tests/integration/test_configured_admin_flow.py`. It creates a DID,
+  configures it through `IDP_ADMIN_DIDS`, issues a JWT from an authenticated session,
+  and confirms that the JWT can read the admin dashboard. Run it with the command in
+  `docs/deployment.md`.
+- This verifies configured role assignment and route authorization in-process. A
+  deployed browser passkey ceremony for an administrator account remains a manual
+  deployment check.
+
+## External deployment values still required
+
+- This workspace has no production hostname, TLS certificate/key, or provisioned
+  administrator DID. Those values cannot be generated safely by the application
+  implementation; supply them in `.env` before public deployment.
+- The Docker engine was inaccessible from this session, so no live Compose deployment
+  or deployed browser passkey validation was performed.
+- Keep one API process for now. The ledger is loaded into a process-local object from a
+  JSON file, and the core credential registry is also process-local; Redis sharing for
+  sessions/challenges alone does not make concurrent replica writes safe. Those stores
+  need a shared transactional backend before horizontal scaling.
 
 The Shad passkey account database, core DID documents, ledger, audit events, JWT signing
-keys, and Redis revocation entries are persisted by the Compose volumes. Core
-authentication sessions and WebAuthn challenges remain in memory and expire or are
-discarded on process restart.
+keys, and Redis revocation entries are persisted by the Compose volumes. Authentication
+sessions and WebAuthn challenges expire in Redis after five minutes.
 
 Traefik uses its self-signed default certificate locally. This setup is for development;
 it must use a trusted certificate before public deployment.

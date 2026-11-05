@@ -9,6 +9,8 @@ the ignored `traefik/certs/` directory; only the localhost certificate and its k
 mounted read-only into Traefik.
 
 The development certificate is only for this machine and hostname. For deployment,
-mount a certificate trusted by clients, update the `Host` rules in `dynamic.yml`, and
-set `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `ALLOWED_ORIGINS` in `.env` to match the
-public hostname and origin.
+set `PUBLIC_HOSTNAME`, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, `ALLOWED_ORIGINS`,
+`IDP_ADMIN_DIDS`, `TLS_CERT_PATH`, and `TLS_KEY_PATH` in `.env`, then run
+`python traefik/render-production-config.py`. The generated production route matches
+the configured hostname and loads the mounted certificate. See [deployment.md](../docs/deployment.md)
+for the complete production setup.

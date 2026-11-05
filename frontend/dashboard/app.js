@@ -1,8 +1,10 @@
 'use strict';
 
-const API_BASE = window.location.origin.includes(':8000') ? '/api/v1' : 'http://localhost:8000/api/v1';
+const API_BASE = ['localhost:3000', '127.0.0.1:3000'].includes(window.location.host)
+  ? 'http://localhost:8000/api/v1'
+  : '/api/v1';
 const REFRESH_INTERVAL = 30000;
-const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, events: null, eventSummary: null, adminToken: sessionStorage.getItem('idp_access_token') || '', busy: false, noticeDismissed: false };
+const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, events: null, eventSummary: null, adminToken: '', busy: false, noticeDismissed: false };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -327,13 +329,10 @@ function bindEvents() {
   $('#admin-token-form').addEventListener('submit', async event => {
     event.preventDefault();
     state.adminToken = $('#admin-token').value.trim();
-    sessionStorage.setItem('idp_access_token', state.adminToken);
     await refreshEvents();
   });
   $('#clear-admin-token').addEventListener('click', () => {
     state.adminToken = '';
-    sessionStorage.removeItem('idp_access_token');
-    sessionStorage.removeItem('idp_authenticated_did');
     $('#admin-token').value = '';
     renderSecurityEvents();
   });

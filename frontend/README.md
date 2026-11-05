@@ -16,7 +16,7 @@ The frontend is a framework-free administration dashboard for the Decentralized 
 - **Identities:** latest state per DID derived from the ledger. This is not a separate identity registry.
 - **Ledger audit:** ledger history, integrity result, CSV export, and the existing demonstration-only tamper simulation endpoint. The tamper endpoint changes the ledger; use it only with a disposable local ledger.
 - **Token security:** active public key and allowed scopes, plus token verification using `POST /api/v1/tokens/verify`. The input is cleared after submission and the submitted JWT is never rendered in the result. Token issuance requires a short-lived verified authentication session; owner revocation requires the signed token and matching JTI.
-- **Security events:** authenticated admin feed with counts, event type/outcome filters, pseudonymous DID references, and expandable event details. The short-lived admin JWT is read from browser `sessionStorage` and cleared when the tab session ends or the user clears the token.
+- **Security events:** authenticated admin feed with counts, event type/outcome filters, pseudonymous DID references, and expandable event details. The short-lived admin JWT stays in dashboard page memory and is cleared when the page is reloaded or the user clears the token.
 - **Service health:** displays fields returned by the application health endpoint; it does not invent per-service latency.
 
 ## Run the dashboard

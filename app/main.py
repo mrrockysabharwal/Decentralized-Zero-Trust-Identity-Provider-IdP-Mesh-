@@ -67,6 +67,7 @@ import app.modules.tokens.router as _tokens_router_module
 # ── Module B (Member 2) — WebAuthn / FIDO2 Biometric Auth ───────────────────
 from app.modules.webauthn import webauthn_router
 import app.modules.webauthn.router as _webauthn_router_module
+from app.modules.webauthn.session_store import auth_session_store
 
 # ── Module A (Member 3) — DID Registry & Cryptography ───────────────────────
 from app.modules.did import did_router
@@ -152,6 +153,27 @@ def _wire_shared_ledger() -> None:
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle handler."""
     init_shad_db()
+    state_backend = os.getenv("EPHEMERAL_STATE_BACKEND", "memory").strip().lower()
+    if state_backend == "redis":
+        import redis
+
+        state_redis = redis.from_url(
+            os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+            decode_responses=True,
+            socket_connect_timeout=3,
+            socket_timeout=3,
+        )
+        # Do not silently fall back to process-local auth state in shared mode.
+        state_redis.ping()
+        auth_session_store.use_redis(state_redis)
+        _webauthn_router_module._challenge_store.use_redis(state_redis)
+        logger.info("Authentication sessions and WebAuthn challenges use shared Redis state")
+    elif state_backend == "memory":
+        auth_session_store.use_memory()
+        _webauthn_router_module._challenge_store.use_memory()
+        logger.warning("Authentication sessions and WebAuthn challenges are process-local")
+    else:
+        raise RuntimeError("EPHEMERAL_STATE_BACKEND must be 'redis' or 'memory'.")
     # ── Startup ───────────────────────────────────────────────────────────────
     _wire_shared_ledger()
     synced_credentials = sync_credentials_to_core()

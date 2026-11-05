@@ -29,6 +29,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
+import json
 from typing import Dict, Optional
 
 # Default challenge lifetime in seconds
@@ -61,6 +62,18 @@ class ChallengeStore:
         self._ttl = ttl_seconds
         self._store: Dict[str, _ChallengeEntry] = {}
         self._lock = threading.Lock()
+        self._redis = None
+
+    def use_redis(self, client) -> None:
+        """Use shared Redis storage; pending local challenges are discarded."""
+        with self._lock:
+            self._store.clear()
+            self._redis = client
+
+    def use_memory(self) -> None:
+        with self._lock:
+            self._redis = None
+            self._store.clear()
 
     # ------------------------------------------------------------------
     # Public API
@@ -83,6 +96,11 @@ class ChallengeStore:
         """
         challenge_bytes = secrets.token_bytes(CHALLENGE_BYTES)
         challenge_b64 = base64.urlsafe_b64encode(challenge_bytes).rstrip(b"=").decode()
+
+        if self._redis is not None:
+            value = json.dumps({"did": did, "ceremony": ceremony})
+            self._redis.setex(f"webauthn:challenge:{challenge_b64}", self._ttl, value)
+            return challenge_bytes, challenge_b64
 
         with self._lock:
             self._purge_expired_unlocked()
@@ -123,8 +141,21 @@ class ChallengeStore:
             If the challenge does not exist, has expired, or the
             did/ceremony binding does not match.
         """
-        with self._lock:
-            entry = self._store.pop(challenge_b64, None)
+        if self._redis is not None:
+            raw_entry = self._redis.getdel(f"webauthn:challenge:{challenge_b64}")
+            if raw_entry is None:
+                entry = None
+            else:
+                payload = json.loads(raw_entry)
+                entry = _ChallengeEntry(
+                    challenge_bytes=base64.urlsafe_b64decode(challenge_b64 + "=" * (-len(challenge_b64) % 4)),
+                    did=payload["did"],
+                    ceremony=payload["ceremony"],
+                    ttl_seconds=self._ttl,
+                )
+        else:
+            with self._lock:
+                entry = self._store.pop(challenge_b64, None)
 
         if entry is None:
             raise ValueError(
@@ -154,17 +185,25 @@ class ChallengeStore:
 
     def has_challenge(self, challenge_b64: str) -> bool:
         """Return True if the challenge exists and has not expired (non-consuming peek)."""
+        if self._redis is not None:
+            return bool(self._redis.exists(f"webauthn:challenge:{challenge_b64}"))
         with self._lock:
             entry = self._store.get(challenge_b64)
             return entry is not None and not entry.is_expired
 
     def clear(self) -> None:
         """Remove all challenges. Intended for testing only."""
+        if self._redis is not None:
+            for key in self._redis.scan_iter(match="webauthn:challenge:*"):
+                self._redis.delete(key)
+            return
         with self._lock:
             self._store.clear()
 
     def pending_count(self) -> int:
         """Return the number of non-expired outstanding challenges."""
+        if self._redis is not None:
+            return sum(1 for _ in self._redis.scan_iter(match="webauthn:challenge:*") )
         with self._lock:
             return sum(1 for e in self._store.values() if not e.is_expired)
 

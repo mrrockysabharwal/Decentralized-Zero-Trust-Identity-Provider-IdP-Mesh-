@@ -27,16 +27,59 @@ persistent data.
 
 ## Configuration
 
-The generated certificate is for local development only. Before deployment, change the
-`Host` rules in `traefik/dynamic.yml` and set
-`WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `ALLOWED_ORIGINS` in `.env` for the public
-hostname and HTTPS origin. Set `IDP_ADMIN_DIDS` to the comma-separated administrator
-DIDs. Keep `.env` and signing keys private.
+The generated certificate and `traefik/dynamic.yml` route are for local development.
+For production, copy the trusted full-chain certificate and its private key to the host
+and set these values in `.env`:
 
-The provided TLS certificate is for local development. Configure a trusted
-certificate resolver or mount a managed certificate at the production proxy before
-exposing the service publicly. The application currently keeps authentication
-sessions and WebAuthn challenges in process memory. Run a single API process; a
-multi-worker or replicated deployment requires shared state for those components.
-Sessions and pending ceremonies are discarded when the API restarts, so users must
-authenticate again.
+```dotenv
+PUBLIC_HOSTNAME=id.example.com
+WEBAUTHN_RP_ID=id.example.com
+WEBAUTHN_ORIGIN=https://id.example.com
+ALLOWED_ORIGINS=https://id.example.com
+IDP_ADMIN_DIDS=did:mesh:key:your-provisioned-admin
+TLS_CERT_PATH=/absolute/host/path/fullchain.pem
+TLS_KEY_PATH=/absolute/host/path/privkey.pem
+TRAEFIK_DYNAMIC_CONFIG=./traefik/dynamic.production.yml
+```
+
+Provision and register the administrator passkey first, then use its DID above. Keep
+`.env`, the TLS private key, and signing keys private. Render the production route and
+start the stack:
+
+```powershell
+python traefik/render-production-config.py
+docker compose up --build -d
+```
+
+The renderer refuses localhost, mismatched RP/origin settings, wildcard CORS, a missing
+administrator DID, absent certificate/key files, a certificate that does not cover the
+hostname or is outside its validity period, and a key that does not match the
+certificate. It writes the ignored `traefik/dynamic.production.yml` consumed by
+Traefik. The certificate must come from a CA trusted by clients; the renderer checks
+hostname, dates, and key matching, but does not validate the public trust chain.
+Renewing/replacing a certificate requires replacing the mounted host file and
+restarting Traefik.
+
+Compose enables Redis-backed authentication sessions and WebAuthn challenges by
+default. `EPHEMERAL_STATE_BACKEND=redis` makes Redis availability a startup requirement;
+the API does not silently fall back to local state. Direct single-process runs default
+to memory unless this variable is set. Sessions and pending ceremonies expire after
+five minutes.
+
+Keep one API process per deployment for now. The simulated ledger and core credential
+registry still use process-local working state, so sharing auth sessions and challenges
+does not make concurrent API replicas safe.
+
+## Verify administrator authorization
+
+Run the configured-DID integration check from the repository root:
+
+```powershell
+python -m pytest tests/integration/test_configured_admin_flow.py -q
+```
+
+The check creates a registered DID, configures that DID as an administrator, issues a
+token from an authenticated session, and confirms that the token can read the admin
+dashboard. It verifies server-assigned admin authorization without embedding an admin
+role in the token request. The deployed browser flow still requires a real passkey
+ceremony for an administrator account before exposing the deployment to operators.

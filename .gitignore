@@ -34,6 +34,7 @@ data/*.sqlite3
 data/token_keys/
 .token_keys/
 traefik/certs/
+traefik/dynamic.production.yml
 !data/.gitkeep
 backend/*.sqlite3
 backend/**/*.sqlite3

@@ -6,6 +6,7 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      EPHEMERAL_STATE_BACKEND: ${EPHEMERAL_STATE_BACKEND:-redis}
       LEDGER_STORAGE_PATH: /app/data/ledger.json
       AUDIT_DB_PATH: /app/data/security_events.sqlite3
       WEBAUTHN_DB_PATH: /app/data/webauthn.sqlite3
@@ -49,9 +50,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-      - ./traefik/certs/dev-localhost.crt:/etc/traefik/certs/dev-localhost.crt:ro
-      - ./traefik/certs/dev-localhost-key.pem:/etc/traefik/certs/dev-localhost-key.pem:ro
+      - ${TRAEFIK_DYNAMIC_CONFIG:-./traefik/dynamic.yml}:/etc/traefik/dynamic.yml:ro
+      - ${TLS_CERT_PATH:-./traefik/certs/dev-localhost.crt}:/etc/traefik/certs/tls.crt:ro
+      - ${TLS_KEY_PATH:-./traefik/certs/dev-localhost-key.pem}:/etc/traefik/certs/tls.key:ro
 
 volumes:
   idp_data:
