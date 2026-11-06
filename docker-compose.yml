@@ -1,0 +1,83 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trustmesh:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      TOKEN_KEY_DIR: /run/secrets/trustmesh-keys
+      REDIS_URL: redis://redis:6379/0
+      TRUSTMESH_ENV: production
+      TOKEN_REVOCATION_ALLOW_IN_MEMORY: "false"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?Set ALLOWED_ORIGINS to explicit browser origin(s)}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:?Set WEBAUTHN_RP_ID to the relying-party domain}
+      WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-TrustMesh}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:?Set WEBAUTHN_ORIGIN to the exact browser origin}
+      WEBAUTHN_DB_PATH: /data/webauthn.sqlite3
+      ADMIN_JWT_PUBLIC_KEY: ${ADMIN_JWT_PUBLIC_KEY:-}
+      ADMIN_DIDS: ${ADMIN_DIDS:-}
+      ENABLE_LEDGER_TAMPER_DEMO: ${ENABLE_LEDGER_TAMPER_DEMO:-false}
+    volumes:
+      - webauthn_data:/data
+      - type: bind
+        source: ${TOKEN_KEY_HOST_DIR:?Set TOKEN_KEY_HOST_DIR to an existing external signing-key directory}
+        target: /run/secrets/trustmesh-keys
+        read_only: true
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, sqlite3, urllib.request
+          response = urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)
+          if json.load(response).get('status') != 'healthy':
+              raise SystemExit(1)
+          connection = sqlite3.connect('file:/data/webauthn.sqlite3?mode=rw', uri=True, timeout=5)
+          try:
+              result = connection.execute('PRAGMA quick_check').fetchone()
+              if result is None or result[0] != 'ok':
+                  raise SystemExit(1)
+          finally:
+              connection.close()
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - always
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+  webauthn_data:
