@@ -37,3 +37,7 @@ data/*.json
 
 # Locally generated signing keys (public and private)
 .token_keys/
+
+# Locally generated mkcert leaf certificates and private keys
+/certs/trustmesh.test.pem
+/certs/trustmesh.test-key.pem

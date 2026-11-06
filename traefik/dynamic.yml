@@ -1,0 +1,18 @@
+http:
+  routers:
+    trustmesh:
+      rule: "Host(`trustmesh.test`)"
+      entryPoints:
+        - websecure
+      service: trustmesh-app
+      tls: {}
+  services:
+    trustmesh-app:
+      loadBalancer:
+        servers:
+          - url: "http://app:8000"
+
+tls:
+  certificates:
+    - certFile: /certs/trustmesh.test.pem
+      keyFile: /certs/trustmesh.test-key.pem

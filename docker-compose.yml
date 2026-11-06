@@ -1,4 +1,43 @@
 services:
+  traefik:
+    image: traefik:v3.3.6
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
+    volumes:
+      - type: bind
+        source: ./traefik/traefik.yml
+        target: /etc/traefik/traefik.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./traefik/dynamic.yml
+        target: /etc/traefik/dynamic.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      # Generate both mkcert files before starting; missing files are not created.
+      - type: bind
+        source: ./certs/trustmesh.test.pem
+        target: /certs/trustmesh.test.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./certs/trustmesh.test-key.pem
+        target: /certs/trustmesh.test-key.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      proxy:
+        ipv4_address: 172.30.255.2
+    depends_on:
+      app:
+        condition: service_healthy
+
   app:
     build:
       context: .
@@ -13,11 +52,10 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    ports:
-      - "127.0.0.1:8000:8000"
     environment:
       TOKEN_KEY_DIR: /run/secrets/trustmesh-keys
       REDIS_URL: redis://redis:6379/0
+      FORWARDED_ALLOW_IPS: 172.30.255.2
       TRUSTMESH_ENV: production
       TOKEN_REVOCATION_ALLOW_IN_MEMORY: "false"
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?Set ALLOWED_ORIGINS to explicit browser origin(s)}
@@ -37,6 +75,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - proxy
+      - backend
     healthcheck:
       test:
         - CMD
@@ -72,6 +113,8 @@ services:
       - noeviction
     volumes:
       - redis_data:/data
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -81,3 +124,14 @@ services:
 volumes:
   redis_data:
   webauthn_data:
+
+networks:
+  proxy:
+    name: trustmesh-proxy
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.255.0/29
+  backend:
+    driver: bridge
+    internal: true
