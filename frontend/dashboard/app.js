@@ -2,7 +2,7 @@
 
 const API_BASE = window.location.origin.includes(':8000') ? '/api/v1' : 'http://localhost:8000/api/v1';
 const REFRESH_INTERVAL = 30000;
-const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, busy: false, noticeDismissed: false };
+const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, errors: {}, busy: false, noticeDismissed: false };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -46,56 +46,63 @@ function latestIdentities(records = []) {
   return [...latest.values()].sort((a, b) => Number(b.index) - Number(a.index));
 }
 
-function setConnection(isLive, message = '') {
+function setConnection(status, message = '') {
+  const isLive = status === 'connected';
+  const isPartial = status === 'partial';
   const chip = $('#connection-chip');
   chip.classList.toggle('offline', !isLive);
-  $('#connection-label').textContent = isLive ? 'API connected' : 'API unavailable';
-  $('#sidebar-status').textContent = isLive ? 'Mesh connected' : 'Mesh unavailable';
+  chip.classList.toggle('partial', isPartial);
+  $('#connection-label').textContent = isLive ? 'API connected' : isPartial ? 'Partial data' : 'API unavailable';
+  $('#sidebar-status').textContent = isLive ? 'Mesh connected' : isPartial ? 'Mesh partially available' : 'Mesh unavailable';
   $('#sidebar-status-dot').classList.toggle('offline', !isLive);
-  $('#footer-api-status').textContent = isLive ? 'FastAPI connected' : 'FastAPI unavailable';
+  $('#footer-api-status').textContent = isLive ? 'FastAPI connected' : isPartial ? 'FastAPI partially available' : 'FastAPI unavailable';
   const notice = $('#connection-notice');
   notice.hidden = isLive || state.noticeDismissed;
+  $('#connection-title').textContent = isPartial ? 'Some dashboard data could not be refreshed' : 'Live data is unavailable';
   if (message) $('#connection-message').textContent = message;
 }
 
 function renderMetrics() {
   const records = state.ledger;
   const identities = latestIdentities(records || []);
-  $('#metric-records').textContent = records ? String(records.length) : '—';
-  $('#metric-records-foot').textContent = records ? (records.length ? `Latest record #${records[0]?.index ?? '—'}` : 'No ledger records returned') : 'Waiting for API';
-  $('#metric-identities').textContent = records ? String(identities.length) : '—';
-  $('#metric-identities-foot').textContent = records ? `${identities.filter(item => item.operation !== 'DEACTIVATE').length} active · ${identities.filter(item => item.operation === 'DEACTIVATE').length} deactivated` : 'Derived from ledger history';
+  $('#metric-records').textContent = records ? String(records.length) : 'Unavailable';
+  $('#metric-records-foot').textContent = records ? (records.length ? `Latest record #${records[0]?.index ?? '—'}` : 'No ledger records returned') : (state.errors.ledger || 'Ledger data is unavailable');
+  $('#metric-identities').textContent = records ? String(identities.length) : 'Unavailable';
+  $('#metric-identities-foot').textContent = records ? `${identities.filter(item => item.operation !== 'DEACTIVATE').length} active · ${identities.filter(item => item.operation === 'DEACTIVATE').length} deactivated` : (state.errors.ledger || 'Derived from ledger history');
   const integrity = state.audit;
-  const integrityText = !integrity ? 'Unknown' : integrity.valid ? 'Verified' : 'Failed';
+  const integrityText = !integrity ? (state.errors.audit ? 'Unavailable' : 'Checking') : integrity.valid ? 'Verified' : 'Failed';
   $('#metric-integrity').textContent = integrityText;
-  $('#metric-integrity').className = `metric-value metric-status ${integrity?.valid ? 'text-success' : integrity ? 'text-danger' : ''}`;
-  $('#metric-integrity-foot').textContent = integrity ? `${integrity.total_records} records checked` : 'Audit result unavailable';
+  $('#metric-integrity').className = `metric-value metric-status ${integrity?.valid ? 'text-success' : integrity ? 'text-danger' : state.errors.audit ? 'text-warning' : ''}`;
+  $('#metric-integrity-foot').textContent = integrity ? `${integrity.total_records} records checked` : (state.errors.audit || 'Audit result unavailable');
   const key = state.publicKey;
-  $('#metric-signing').textContent = key?.algorithm || '—';
-  $('#metric-signing-foot').textContent = key ? `Issuer ${key.issuer}` : 'Public-key endpoint unavailable';
+  $('#metric-signing').textContent = key?.algorithm || (state.errors.publicKey ? 'Unavailable' : '—');
+  $('#metric-signing-foot').textContent = key ? `Issuer ${key.issuer}` : (state.errors.publicKey || 'Public-key endpoint unavailable');
 
   const banner = $('#integrity-banner');
   banner.classList.toggle('integrity-good', Boolean(integrity?.valid));
   banner.classList.toggle('integrity-bad', Boolean(integrity && !integrity.valid));
-  $('#integrity-symbol').textContent = integrity ? (integrity.valid ? '✓' : '!') : '…';
-  $('#integrity-title').textContent = integrity ? (integrity.valid ? 'Ledger integrity verified' : 'Ledger integrity check failed') : 'Waiting for audit';
-  $('#integrity-description').textContent = integrity ? (integrity.valid ? `All ${integrity.total_records} records passed the chain check.` : (integrity.error || 'The ledger reported an integrity failure.')) : 'The API will report the current chain status.';
+  banner.classList.toggle('integrity-warning', !integrity);
+  $('#integrity-symbol').textContent = integrity ? (integrity.valid ? '✓' : '!') : state.errors.audit ? '!' : '…';
+  $('#integrity-title').textContent = integrity ? (integrity.valid ? 'Ledger integrity verified' : 'Ledger integrity check failed') : (state.errors.audit ? 'Ledger audit unavailable' : 'Waiting for audit');
+  $('#integrity-description').textContent = integrity ? (integrity.valid ? `All ${integrity.total_records} records passed the chain check.` : (integrity.error || 'The ledger reported an integrity failure.')) : (state.errors.audit || 'The API will report the current chain status.');
 }
 
 function tableState(colspan, message, kind = 'empty') {
-  return `<tr><td colspan="${colspan}"><div class="table-state ${kind === 'error' ? 'state-error' : ''}">${escapeHtml(message)}</div></td></tr>`;
+  const icon = kind === 'error' ? '!' : '—';
+  const role = kind === 'error' ? 'alert' : 'status';
+  return `<tr><td colspan="${colspan}"><div class="table-state ${kind === 'error' ? 'state-error' : ''}" role="${role}"><span class="table-state-icon" aria-hidden="true">${icon}</span><span>${escapeHtml(message)}</span></div></td></tr>`;
 }
 
 function renderRecentLedger() {
   const body = $('#recent-ledger-body');
-  if (!state.ledger) { body.innerHTML = tableState(4, 'Ledger data is unavailable.', 'error'); return; }
+  if (!state.ledger) { body.innerHTML = tableState(4, state.errors.ledger || 'Ledger data is unavailable.', 'error'); return; }
   if (!state.ledger.length) { body.innerHTML = tableState(4, 'No ledger records returned by the API.'); return; }
   body.innerHTML = state.ledger.slice(0, 6).map(record => `<tr><td class="mono">#${escapeHtml(record.index)}</td><td class="mono did-cell">${escapeHtml(record.did)}</td><td><span class="operation-chip">${escapeHtml(record.operation)}</span></td><td>${formatDate(record.timestamp)}</td></tr>`).join('');
 }
 
 function renderLedger() {
   const body = $('#ledger-table-body');
-  if (!state.ledger) { body.innerHTML = tableState(6, 'Could not load ledger records. Check the API connection and refresh.', 'error'); $('#ledger-count').textContent = 'Data unavailable'; $('#export-ledger-button').disabled = true; return; }
+  if (!state.ledger) { body.innerHTML = tableState(6, state.errors.ledger || 'Could not load ledger records. Check the API connection and refresh.', 'error'); $('#ledger-count').textContent = 'Data unavailable'; $('#export-ledger-button').disabled = true; return; }
   $('#ledger-count').textContent = `${state.ledger.length} record${state.ledger.length === 1 ? '' : 's'} returned by the API`;
   $('#export-ledger-button').disabled = !state.ledger.length;
   if (!state.ledger.length) { body.innerHTML = tableState(6, 'The ledger contains no records.'); return; }
@@ -105,7 +112,7 @@ function renderLedger() {
 
 function renderIdentities() {
   const body = $('#identity-table-body');
-  if (!state.ledger) { body.innerHTML = tableState(4, 'Identity records are unavailable because ledger data could not be loaded.', 'error'); $('#identity-count').textContent = 'Data unavailable'; return; }
+  if (!state.ledger) { body.innerHTML = tableState(4, state.errors.ledger || 'Identity records are unavailable because ledger data could not be loaded.', 'error'); $('#identity-count').textContent = 'Data unavailable'; return; }
   const identities = latestIdentities(state.ledger);
   const term = $('#identity-search').value.trim().toLowerCase();
   const shown = identities.filter(record => record.did.toLowerCase().includes(term));
@@ -120,9 +127,9 @@ function renderTokenInfo() {
   $('#key-status').className = `status-chip ${key ? 'success' : 'warning'}`;
   $('#key-algorithm').textContent = key ? `${key.algorithm} (Ed25519)` : '—';
   $('#key-issuer').textContent = key?.issuer || '—';
-  $('#public-key').textContent = key?.public_key_pem || 'Public key is unavailable.';
+  $('#public-key').textContent = key?.public_key_pem || state.errors.publicKey || 'Public key is unavailable.';
   const scopeList = $('#scope-list');
-  if (!state.scopes) scopeList.innerHTML = '<span class="muted">Allowed scopes are unavailable.</span>';
+  if (!state.scopes) scopeList.innerHTML = `<span class="muted">${escapeHtml(state.errors.scopes || 'Allowed scopes are unavailable.')}</span>`;
   else if (!state.scopes.length) scopeList.innerHTML = '<span class="muted">The API returned no scopes.</span>';
   else scopeList.innerHTML = state.scopes.map(scope => `<span class="scope-chip">${escapeHtml(scope)}</span>`).join('');
 }
@@ -137,8 +144,9 @@ function renderHealth() {
   const overview = $('#overview-health-list');
   const grid = $('#health-grid');
   if (!state.health) {
-    overview.innerHTML = '<div class="table-state state-error">Health response unavailable.</div>';
-    grid.innerHTML = '<div class="surface-card"><div class="table-state state-error">Could not load service health. Check the API connection and retry.</div></div>';
+    const message = escapeHtml(state.errors.health || 'Could not load service health. Check the API connection and retry.');
+    overview.innerHTML = `<div class="table-state state-error" role="alert">${message}</div>`;
+    grid.innerHTML = `<div class="surface-card"><div class="table-state state-error" role="alert">${message}</div></div>`;
     return;
   }
   if (!items.length) {
@@ -153,9 +161,9 @@ function renderHealth() {
 
 function statusClass(status) {
   const value = String(status || '').toLowerCase();
-  if (['healthy', 'active', 'valid'].includes(value)) return 'success';
+  if (['healthy', 'active', 'valid', 'ready', 'up', 'ok'].includes(value)) return 'success';
   if (['degraded', 'pending', 'unknown'].includes(value)) return 'warning';
-  if (['compromised', 'unreachable', 'failed', 'unhealthy'].includes(value)) return 'danger';
+  if (['compromised', 'unreachable', 'failed', 'unhealthy', 'down', 'error'].includes(value)) return 'danger';
   return 'neutral';
 }
 
@@ -178,22 +186,58 @@ async function refreshAll() {
   state.busy = true;
   $('#refresh-button').disabled = true;
   $('#refresh-button').classList.add('is-loading');
-  const results = await Promise.allSettled([
-    request('/ledger'), request('/ledger/verify'), request('/tokens/public-key'), request('/tokens/policy/scopes'), request('/health')
-  ]);
-  state.ledger = results[0].status === 'fulfilled' && Array.isArray(results[0].value) ? results[0].value : null;
-  state.audit = results[1].status === 'fulfilled' ? results[1].value : null;
-  state.publicKey = results[2].status === 'fulfilled' ? results[2].value : null;
-  state.scopes = results[3].status === 'fulfilled' && Array.isArray(results[3].value?.scopes) ? results[3].value.scopes : null;
-  state.health = results[4].status === 'fulfilled' ? results[4].value : null;
-  const live = results.some(result => result.status === 'fulfilled');
-  const firstError = results.find(result => result.status === 'rejected')?.reason;
-  setConnection(live, firstError?.name === 'AbortError' ? 'The API request timed out. Check that the backend is running.' : (firstError?.message || 'Could not reach the FastAPI service.'));
-  renderMetrics(); renderRecentLedger(); renderLedger(); renderIdentities(); renderTokenInfo(); renderHealth();
-  $('#last-updated').textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date())}`;
-  state.busy = false;
-  $('#refresh-button').disabled = false;
-  $('#refresh-button').classList.remove('is-loading');
+  $('#main-content').setAttribute('aria-busy', 'true');
+  try {
+    const endpoints = [
+      ['ledger', '/ledger'],
+      ['audit', '/ledger/verify'],
+      ['publicKey', '/tokens/public-key'],
+      ['scopes', '/tokens/policy/scopes'],
+      ['health', '/health']
+    ];
+    const results = await Promise.allSettled(endpoints.map(([, path]) => request(path)));
+    state.errors = Object.fromEntries(endpoints.map(([name], index) => {
+      const result = results[index];
+      if (result.status === 'fulfilled') return [name, null];
+      const error = result.reason;
+      const message = error?.name === 'AbortError'
+        ? 'Request timed out. Check that the API is running and try again.'
+        : (error?.message || 'The API request failed.');
+      return [name, message];
+    }));
+    state.ledger = results[0].status === 'fulfilled' && Array.isArray(results[0].value) ? results[0].value : null;
+    state.audit = results[1].status === 'fulfilled' && results[1].value && typeof results[1].value === 'object' && !Array.isArray(results[1].value) && typeof results[1].value.valid === 'boolean' ? results[1].value : null;
+    state.publicKey = results[2].status === 'fulfilled' && results[2].value && typeof results[2].value === 'object' && !Array.isArray(results[2].value) && typeof results[2].value.public_key_pem === 'string' ? results[2].value : null;
+    state.scopes = results[3].status === 'fulfilled' && Array.isArray(results[3].value?.scopes) ? results[3].value.scopes : null;
+    state.health = results[4].status === 'fulfilled' && results[4].value && typeof results[4].value === 'object' && !Array.isArray(results[4].value) && typeof results[4].value.status === 'string' ? results[4].value : null;
+    if (results[0].status === 'fulfilled' && !Array.isArray(results[0].value)) state.errors.ledger = 'The API returned an unexpected ledger response.';
+    if (results[1].status === 'fulfilled' && !state.audit) state.errors.audit = 'The API returned an unexpected audit response.';
+    if (results[2].status === 'fulfilled' && !state.publicKey) state.errors.publicKey = 'The API returned an unexpected public-key response.';
+    if (results[3].status === 'fulfilled' && !Array.isArray(results[3].value?.scopes)) state.errors.scopes = 'The API returned an unexpected scopes response.';
+    if (results[4].status === 'fulfilled' && !state.health) state.errors.health = 'The API returned an unexpected health response.';
+
+    const endpointLabels = {
+      ledger: 'ledger data',
+      audit: 'ledger audit',
+      publicKey: 'token signing key',
+      scopes: 'allowed scopes',
+      health: 'service health'
+    };
+    const failedEndpoints = endpoints.filter(([name]) => state.errors[name]).map(([name]) => endpointLabels[name]);
+    const successCount = results.length - failedEndpoints.length;
+    const status = successCount === results.length ? 'connected' : successCount ? 'partial' : 'unavailable';
+    const message = failedEndpoints.length
+      ? `Could not refresh ${failedEndpoints.join(', ')}. Other dashboard data may still be available; use Refresh to try again.`
+      : '';
+    setConnection(status, message);
+    renderMetrics(); renderRecentLedger(); renderLedger(); renderIdentities(); renderTokenInfo(); renderHealth();
+    $('#last-updated').textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date())}`;
+  } finally {
+    state.busy = false;
+    $('#main-content').setAttribute('aria-busy', 'false');
+    $('#refresh-button').disabled = false;
+    $('#refresh-button').classList.remove('is-loading');
+  }
 }
 
 function showToast(message, type = 'info') {
@@ -216,6 +260,7 @@ function closeMenu() {
   $('#sidebar').classList.remove('open');
   $('#scrim').hidden = true;
   $('#menu-button').setAttribute('aria-expanded', 'false');
+  $('#menu-button').setAttribute('aria-label', 'Open navigation');
 }
 
 function exportLedger() {
@@ -268,7 +313,9 @@ function bindEvents() {
     const open = $('#sidebar').classList.toggle('open');
     $('#scrim').hidden = !open;
     $('#menu-button').setAttribute('aria-expanded', String(open));
+    $('#menu-button').setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
   });
+  window.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
   $('#scrim').addEventListener('click', closeMenu);
   $('#clear-token-button').addEventListener('click', () => { $('#verify-token').value = ''; $('#verify-result').hidden = true; $('#verify-token').focus(); });
   $('#verify-form').addEventListener('submit', async event => {
