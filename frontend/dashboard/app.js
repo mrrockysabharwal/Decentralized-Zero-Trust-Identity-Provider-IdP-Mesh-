@@ -1,6 +1,8 @@
 'use strict';
 
-const API_BASE = window.location.origin.includes(':8000') ? '/api/v1' : 'http://localhost:8000/api/v1';
+const isSeparatePortLocalDev = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
+  && !['', '80', '443', '8000'].includes(window.location.port);
+const API_BASE = isSeparatePortLocalDev ? 'http://localhost:8000/api/v1' : '/api/v1';
 const REFRESH_INTERVAL = 30000;
 const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, errors: {}, busy: false, noticeDismissed: false };
 
