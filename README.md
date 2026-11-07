@@ -111,6 +111,9 @@ Use the [Installation Guide](docs/INSTALLATION_GUIDE.md) for the complete setup 
 
 Open `http://localhost:8000/docs` for the live OpenAPI UI, `http://localhost:8000/dashboard/` for the dashboard, and `http://localhost:8000/portal/` for the portal. The combined app serves these assets directly; a separate static server is optional. Redis being unavailable does not necessarily prevent the process from starting, but health is degraded and revocation/admin operations fail closed. The app initializes the browser passkey SQLite schema at startup; review `WEBAUTHN_DB_PATH` before running if the default database must not be changed.
 
+   For the local Docker Compose deployment with Traefik and mkcert HTTPS, see the
+   [Docker deployment guide](docs/DEPLOYMENT_GUIDE.md).
+
 ## API reference
 
 See [API documentation](docs/API_DOCUMENTATION.md) for route methods, paths, request/response shapes, authentication, statuses, and implementation state. The live `/docs` page is generated from the currently mounted FastAPI routes.
@@ -141,7 +144,7 @@ This command is provided as a project instruction; it was not run as part of thi
 - Ordinary token issuance and revocation HTTP routes return `503`; token verification, public key, and allowed-scope routes are separate and implemented.
 - OIDC discovery is static; authorization/token/userinfo are incomplete. The OIDC helper service is not wired to a complete exchange flow.
 - Optional JSON file persistence exists only on the ledger class and is not configured by `app.main`.
-- There is no security-event store/API, deployment container/reverse-proxy setup, or license file.
+- There is no security-event store/API or license file. The repository includes a local Docker Compose/Traefik deployment path, but it is not production hardening.
 
 ## Future enhancements
 

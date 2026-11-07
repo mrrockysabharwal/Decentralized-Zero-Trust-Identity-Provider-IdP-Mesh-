@@ -6,6 +6,7 @@ These are the current source-based guides for the combined application. Older au
 
 - [Project README](../README.md) — overview, feature boundaries, run summary, security notes, and project map.
 - [Installation Guide](INSTALLATION_GUIDE.md) — prerequisites, key directory, environment, Redis, startup, frontend, and troubleshooting.
+- [Docker deployment guide](DEPLOYMENT_GUIDE.md) — local Docker Compose stack, Redis, Traefik, mkcert HTTPS, access, health checks, and troubleshooting.
 - [API documentation](API_DOCUMENTATION.md) — currently mounted routes, methods, authentication, request/response shapes, and implementation state.
 - [Architecture](ARCHITECTURE.md) — actual application wiring, data stores, verified flows, and Mermaid diagrams.
 - [Implementation status](IMPLEMENTATION_STATUS.md) — implemented, partially implemented, and pending capabilities with current behavior and integration gaps.

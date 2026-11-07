@@ -2,6 +2,10 @@
 
 This guide covers the combined FastAPI application, `app.main:app`. It reflects the checked-in dependency manifests and runtime configuration; it does not provision keys, change an existing database, or claim production readiness.
 
+For the local Docker Compose stack with Traefik and HTTPS, see the
+[Docker deployment guide](DEPLOYMENT_GUIDE.md). The direct Python instructions
+below remain available independently of Docker.
+
 ## Prerequisites
 
 - Python 3.10 or newer. The source uses Python 3.10 union type syntax; the repository does not publish a tested-version matrix.
@@ -58,6 +62,11 @@ $env:TOKEN_KEY_DIR = "C:\secure\trustmesh-token-keys"
 | `WEBAUTHN_RP_NAME` | No | `Zero Trust Identity Mesh` | WebAuthn relying-party display name. |
 | `WEBAUTHN_ORIGIN` | No | `http://localhost:8000` | Exact browser origin expected by WebAuthn verification. |
 | `WEBAUTHN_DB_PATH` | No | `backend/webauthn.sqlite3` | SQLite file used by the browser passkey flow. Startup initializes/updates its schema. |
+
+The Docker Compose deployment has additional required host-side variables:
+`TOKEN_KEY_HOST_DIR`, `ALLOWED_ORIGINS`, `WEBAUTHN_RP_ID`, and
+`WEBAUTHN_ORIGIN`. See the [Docker deployment guide](DEPLOYMENT_GUIDE.md) for
+their Compose values and local HTTPS setup.
 
 `app.main` calls `python-dotenv`'s `load_dotenv()` before loading its application modules. Environment variables set in the shell take precedence. `backend/.env.example` is an example, not an automatically loaded configuration file.
 
