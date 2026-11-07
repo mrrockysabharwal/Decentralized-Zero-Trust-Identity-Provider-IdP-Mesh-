@@ -3,7 +3,7 @@ services:
     image: traefik:v3.3.6
     restart: unless-stopped
     ports:
-      - "127.0.0.1:80:80"
+      - "127.0.0.1:8080:80"
       - "127.0.0.1:443:443"
     volumes:
       - type: bind
@@ -12,28 +12,33 @@ services:
         read_only: true
         bind:
           create_host_path: false
+
       - type: bind
         source: ./traefik/dynamic.yml
         target: /etc/traefik/dynamic.yml
         read_only: true
         bind:
           create_host_path: false
-      # Generate both mkcert files before starting; missing files are not created.
+
+      # Generate both mkcert files before starting.
       - type: bind
         source: ./certs/trustmesh.test.pem
         target: /certs/trustmesh.test.pem
         read_only: true
         bind:
           create_host_path: false
+
       - type: bind
         source: ./certs/trustmesh.test-key.pem
         target: /certs/trustmesh.test-key.pem
         read_only: true
         bind:
           create_host_path: false
+
     networks:
       proxy:
-        ipv4_address: 172.30.255.2
+        ipv4_address: 172.30.255.3
+
     depends_on:
       app:
         condition: service_healthy
@@ -52,10 +57,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
     environment:
       TOKEN_KEY_DIR: /run/secrets/trustmesh-keys
       REDIS_URL: redis://redis:6379/0
-      FORWARDED_ALLOW_IPS: 172.30.255.2
+      FORWARDED_ALLOW_IPS: "172.30.255.3"
       TRUSTMESH_ENV: production
       TOKEN_REVOCATION_ALLOW_IN_MEMORY: "false"
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?Set ALLOWED_ORIGINS to explicit browser origin(s)}
@@ -66,18 +72,22 @@ services:
       ADMIN_JWT_PUBLIC_KEY: ${ADMIN_JWT_PUBLIC_KEY:-}
       ADMIN_DIDS: ${ADMIN_DIDS:-}
       ENABLE_LEDGER_TAMPER_DEMO: ${ENABLE_LEDGER_TAMPER_DEMO:-false}
+
     volumes:
       - webauthn_data:/data
       - type: bind
         source: ${TOKEN_KEY_HOST_DIR:?Set TOKEN_KEY_HOST_DIR to an existing external signing-key directory}
         target: /run/secrets/trustmesh-keys
         read_only: true
+
     depends_on:
       redis:
         condition: service_healthy
+
     networks:
       - proxy
       - backend
+
     healthcheck:
       test:
         - CMD
@@ -95,6 +105,7 @@ services:
                   raise SystemExit(1)
           finally:
               connection.close()
+
       interval: 30s
       timeout: 10s
       retries: 3
@@ -111,10 +122,13 @@ services:
       - always
       - --maxmemory-policy
       - noeviction
+
     volumes:
       - redis_data:/data
+
     networks:
       - backend
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -132,6 +146,7 @@ networks:
     ipam:
       config:
         - subnet: 172.30.255.0/29
+
   backend:
     driver: bridge
     internal: true

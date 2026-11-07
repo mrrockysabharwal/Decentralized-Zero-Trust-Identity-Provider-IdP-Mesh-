@@ -20,6 +20,7 @@ Coverage:
 """
 
 import pytest
+import subprocess
 import sys
 import time
 import uuid
@@ -125,7 +126,23 @@ def populated_client(ledger, cred_store, rev_store, monkeypatch) -> TestClient:
 
 
 def test_admin_import_does_not_initialize_ordinary_token_router():
-    assert "app.modules.tokens.router" not in sys.modules
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys\n"
+                "import app.modules.admin.router\n"
+                "assert 'app.modules.tokens.router' not in sys.modules\n"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "Admin router import check failed in a fresh Python process.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
 
 
 # ---------------------------------------------------------------------------

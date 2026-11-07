@@ -9,6 +9,7 @@ Verifies critical security invariants:
 """
 
 import time
+import jwt
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,6 +28,7 @@ import app.modules.ledger.router as ledger_router_module
 import app.modules.tokens.router as tokens_router_module
 import app.modules.revocation_provider as revocation_provider
 from app.modules.tokens.jwt_engine import generate_signing_keypair, issue_token, verify_token
+from app.modules.tokens.models import TOKEN_AUDIENCE, TOKEN_ISSUER
 from tests.anchor_helpers import anchor_owned_did, create_owned_did
 
 
@@ -169,11 +171,19 @@ class TestSecurityInvariants:
     def test_expired_token_rejected(self, security_test_env):
         """An expired JWT must be rejected by verify endpoint."""
         client = security_test_env["client"]
-        token, _ = issue_token(
-            did="did:mesh:key:z6MkuExpTest",
-            scope=["read:profile"],
-            private_key_pem=security_test_env["private_pem"],
-            expiry_seconds=-10,  # expired 10 seconds ago
+        now = int(time.time())
+        token = jwt.encode(
+            {
+                "sub": "did:mesh:key:z6MkuExpTest",
+                "jti": "expired-token-test",
+                "iat": now - 20,
+                "exp": now - 10,
+                "iss": TOKEN_ISSUER,
+                "aud": TOKEN_AUDIENCE,
+                "scope": ["read:profile"],
+            },
+            security_test_env["private_pem"],
+            algorithm="EdDSA",
         )
 
         resp = client.post("/api/v1/tokens/verify", json={"token": token})
