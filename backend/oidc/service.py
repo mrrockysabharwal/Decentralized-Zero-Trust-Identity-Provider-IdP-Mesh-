@@ -2,13 +2,16 @@ import hashlib
 import secrets
 import sqlite3
 import base64
+import os
 
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 
 # Store OIDC authorization codes separately from the existing database.
-DB_PATH = Path(__file__).resolve().parent / "oidc.sqlite3"
+DB_PATH = Path(
+    os.getenv("OIDC_DB_PATH", str(Path(__file__).resolve().parent / "oidc.sqlite3"))
+)
 
 CODE_TTL_SECONDS = 300
 

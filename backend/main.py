@@ -56,7 +56,9 @@ DB_PATH = Path(
 
 RP_ID = os.getenv("WEBAUTHN_RP_ID", "localhost")
 RP_NAME = os.getenv("WEBAUTHN_RP_NAME", "Zero Trust Identity Mesh")
-ORIGIN = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000")
+_origin_env = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000,https://localhost")
+_origin_list = [o.strip() for o in _origin_env.split(",") if o.strip()]
+ORIGIN = _origin_list[0] if len(_origin_list) == 1 else _origin_list
 
 CHALLENGE_TTL_SECONDS = 300
 
@@ -153,6 +155,15 @@ def init_db():
 
         if "did" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN did TEXT")
+
+    try:
+        from backend.oidc.service import register_client
+        register_client(
+            client_id="trustmesh-demo-client",
+            redirect_uris=["http://localhost:3000/callback", "http://127.0.0.1:3000/callback"],
+        )
+    except Exception:
+        pass
 
 
 # --------------------------------------------------

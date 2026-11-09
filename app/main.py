@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -269,6 +269,20 @@ app.include_router(shad_ui_router, prefix="/shad")
 app.include_router(shad_passkey_router, prefix="/api/v1")
 app.include_router(shad_data_router, prefix="/api/v1")
 app.include_router(shad_oidc_router, prefix="/api/v1")
+
+
+@app.get("/.well-known/openid-configuration", include_in_schema=False)
+async def root_openid_configuration(request: Request):
+    """Direct alias for root-level OIDC discovery."""
+    from backend.oidc.router import openid_configuration
+    return await openid_configuration(request)
+
+
+@app.get("/.well-known/jwks.json", include_in_schema=False)
+async def root_jwks_configuration():
+    """Direct alias for root-level JWKS."""
+    from backend.oidc.router import jwks
+    return await jwks()
 
 
 @app.get("/login", include_in_schema=False)
