@@ -1,6 +1,11 @@
-from fastapi import APIRouter, HTTPException, Query, Header
-from fastapi import Cookie
+import os
+import re
+from fastapi import APIRouter, HTTPException, Query, Header, Cookie, Request
 from typing import Optional
+from urllib.parse import urlencode
+from fastapi.responses import RedirectResponse
+
+
 from backend.oidc.service import (
     generate_authorization_code,
     validate_client_redirect_uri,
@@ -9,11 +14,10 @@ from backend.oidc.service import (
     validate_access_token,
     ACCESS_TOKEN_TTL_SECONDS,
     validate_login_session,
+    create_id_token,
+    get_jwks,
 )
-
-from backend.oidc.schemas import TokenRequest, TokenResponse
-from fastapi.responses import RedirectResponse
-from urllib.parse import urlencode
+from backend.oidc.schemas import TokenRequest, TokenResponse, JWKSResponse
 
 router = APIRouter(prefix="/oidc", tags=["OIDC"])
 
@@ -21,21 +25,44 @@ router = APIRouter(prefix="/oidc", tags=["OIDC"])
 # 1. OpenID Connect Discovery Endpoint
 @router.get("/.well-known/openid-configuration")
 async def openid_configuration():
+    issuer = os.getenv("OIDC_ISSUER", "http://127.0.0.1:8000/oidc")
     return {
-        "issuer": "http://127.0.0.1:8000/oidc",
-        "authorization_endpoint": "http://127.0.0.1:8000/oidc/authorize",
-        "token_endpoint": "http://127.0.0.1:8000/oidc/token",
-        "userinfo_endpoint": "http://127.0.0.1:8000/oidc/userinfo",
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/authorize",
+        "token_endpoint": f"{issuer}/token",
+        "userinfo_endpoint": f"{issuer}/userinfo",
+        "jwks_uri": f"{issuer}/jwks",
         "response_types_supported": ["code"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "scopes_supported": ["openid", "profile", "email"],
+        "token_endpoint_auth_methods_supported": [
+            "none",
+            "client_secret_basic",
+            "client_secret_post",
+        ],
+        "claims_supported": [
+            "sub",
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "auth_time",
+            "preferred_username",
+            "nonce",
+        ],
+        "code_challenge_methods_supported": ["S256"],
         "grant_types_supported": ["authorization_code"],
     }
 
 
+# 2. JSON Web Key Set (JWKS) Endpoint
+@router.get("/jwks", response_model=JWKSResponse)
+async def jwks():
+    return get_jwks()
 
-import re
+
+
 
 @router.get("/authorize")
 async def authorize(
@@ -46,11 +73,15 @@ async def authorize(
     state: Optional[str] = Query(None),
     code_challenge: str = Query(...),
     code_challenge_method: str = Query("S256"),
+    nonce: Optional[str] = Query(None),
+    format: Optional[str] = Query(None),
+    request: Request = None,
     session_token: Optional[str] = Cookie(
         None,
         alias="tm_login_session",
     ),
 ):
+
     # Validate response type
     if response_type != "code":
         raise HTTPException(
@@ -102,6 +133,7 @@ async def authorize(
         scope=scope,
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
+        nonce=nonce,
     )
 
     # Redirect back to registered client
@@ -113,11 +145,21 @@ async def authorize(
         params["state"] = state
 
     separator = "&" if "?" in redirect_uri else "?"
+    redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
+
+    accept_header = request.headers.get("accept", "") if request else ""
+    if format == "json" or "application/json" in accept_header:
+        return {
+            "code": code,
+            "state": state,
+            "redirect_url": redirect_url,
+        }
 
     return RedirectResponse(
-        url=f"{redirect_uri}{separator}{urlencode(params)}",
+        url=redirect_url,
         status_code=302,
     )
+
 
 
 # 3. Token Exchange Endpoint
@@ -130,15 +172,6 @@ async def token_exchange(body: TokenRequest):
             detail="Unsupported grant_type",
         )
 
-    print("TOKEN CLIENT ID:", repr(body.client_id))
-    print("TOKEN REDIRECT URI:", repr(body.redirect_uri))
-    print(
-    "CLIENT VALIDATION:",
-    validate_client_redirect_uri(
-        body.client_id,
-        body.redirect_uri,
-    ),
-)
     if not validate_client_redirect_uri(
         body.client_id,
         body.redirect_uri,
@@ -161,19 +194,29 @@ async def token_exchange(body: TokenRequest):
             detail="Invalid, expired, reused code or failed PKCE verification",
         )
 
-    access_token = create_access_token(
+    token_data = create_access_token(
         username=result["username"],
         client_id=result["client_id"],
         scope=result["scope"],
     )
 
+    id_token = None
+    if "openid" in result["scope"].split():
+        id_token = create_id_token(
+            username=result["username"],
+            client_id=result["client_id"],
+            scope=result["scope"],
+            nonce=result.get("nonce"),
+        )
+
     return TokenResponse(
-        access_token=access_token,
+        access_token=token_data["access_token"],
         token_type="Bearer",
         expires_in=ACCESS_TOKEN_TTL_SECONDS,
-        id_token=None,
+        id_token=id_token,
         scope=result["scope"],
     )
+
 
 # 4. UserInfo Endpoint
 @router.get("/userinfo")

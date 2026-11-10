@@ -21,3 +21,16 @@ class TokenResponse(BaseModel):
 class UserInfoResponse(BaseModel):
     sub: str
     preferred_username: Optional[str] = None
+
+
+class JWKKey(BaseModel):
+    kty: str
+    use: str
+    alg: str
+    kid: str
+    n: str
+    e: str
+
+
+class JWKSResponse(BaseModel):
+    keys: list[JWKKey]

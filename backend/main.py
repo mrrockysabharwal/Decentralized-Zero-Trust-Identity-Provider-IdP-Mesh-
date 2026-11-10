@@ -9,19 +9,17 @@ verification, session/token issuance, rate limiting, and other security controls
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sqlite3
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Optional
 
 import cbor2
-from datetime import datetime, timedelta, timezone
-from fastapi import Response
-from fastapi import FastAPI, HTTPException
+from fastapi import Cookie, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -30,6 +28,12 @@ from app.modules.ledger.router import router as ledger_router
 from app.modules.ledger.router import get_ledger
 from app.modules.ledger.models import LedgerOperation
 from app.modules.ledger.hasher import hash_did_document
+from backend.oidc.router import router as oidc_router
+from backend.oidc.service import (
+    validate_login_session,
+    initialize_database,
+    register_client,
+)
 
 
 from webauthn import (
@@ -65,12 +69,16 @@ ORIGIN = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000")
 
 CHALLENGE_TTL_SECONDS = 300
 
+logger = logging.getLogger("trustmesh")
+logging.basicConfig(level=logging.INFO)
+
 app = FastAPI(
     title="Zero Trust Identity Mesh - WebAuthn API",
     version="1.1.0",
 )
 
 app.include_router(ledger_router)
+app.include_router(oidc_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -182,9 +190,32 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN did TEXT")
 
 
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
+    initialize_database()
+    try:
+        register_client(
+            client_id="trustmesh-client-app",
+            redirect_uris=[
+                "http://localhost:3000/callback",
+                "http://localhost:8000/dashboard.html",
+                "http://127.0.0.1:8000/dashboard.html",
+            ],
+        )
+        register_client(
+            client_id="trustmesh-demo-client",
+            redirect_uris=[
+                "http://localhost:3000/callback",
+                "https://app.example.com/callback",
+            ],
+        )
+        logger.info("TrustMesh database and demo OIDC clients initialized.")
+    except Exception as exc:
+        logger.warning(f"Could not seed default OIDC clients: {exc}")
+    yield
+
+app.router.lifespan_context = lifespan
 
 
 # --------------------------------------------------
@@ -549,6 +580,58 @@ def login_page():
     return frontend_file("login.html")
 
 
+@app.get("/register.html", include_in_schema=False)
+def register_page():
+    return frontend_file("login.html")
+
+
+@app.get("/dashboard.html", include_in_schema=False)
+@app.get("/dashboard", include_in_schema=False)
+def dashboard_page():
+    return frontend_file("dashboard.html")
+
+
+@app.get("/api/me")
+def get_current_user_profile(
+    tm_login_session: Optional[str] = Cookie(None),
+):
+    """Get profile information for the authenticated user session."""
+    if not tm_login_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    session = validate_login_session(tm_login_session)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    username = session["username"]
+    user = get_user(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    did = ensure_user_did(username)
+    credentials = get_credentials(username)
+
+    return {
+        "authenticated": True,
+        "username": username,
+        "did": did,
+        "credential_count": len(credentials),
+        "created_at": user["created_at"] if "created_at" in user.keys() else int(time.time()),
+    }
+
+
+@app.post("/api/logout")
+def logout(response: Response):
+    """Log out the current user by clearing the session cookie."""
+    response.delete_cookie(
+        key="tm_login_session",
+        path="/",
+    )
+    return {"authenticated": False, "message": "Successfully logged out."}
+
+
+
+
 @app.get("/style.css", include_in_schema=False)
 def homepage_stylesheet():
     return frontend_file("style.css")
@@ -566,7 +649,53 @@ def frontend_script():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "webauthn"}
+    ledger = get_ledger()
+    is_valid, error = ledger.verify_integrity()
+    return {
+        "status": "ok",
+        "service": "TrustMesh Decentralized Zero-Trust IdP",
+        "webauthn": "enabled",
+        "oidc": "enabled",
+        "ledger": {
+            "total_records": len(ledger),
+            "valid": is_valid,
+            "error": error,
+        },
+    }
+
+
+@app.post("/api/ledger/restore")
+def restore_ledger_chain():
+    """Restore the ledger chain to an untampered, verified state.
+    
+    Used by demo/audit console to reset state after a simulated tamper attack.
+    """
+    ledger = get_ledger()
+    with ledger._lock:
+        ledger._chain.clear()
+        ledger._create_genesis_record()
+
+        # Re-anchor existing registered users' DIDs
+        with db_connection() as conn:
+            rows = conn.execute("SELECT username, did FROM users WHERE did IS NOT NULL").fetchall()
+            for row in rows:
+                try:
+                    sync_did_document(row["username"], row["did"])
+                except Exception as exc:
+                    logger.warning(f"Failed to re-anchor DID for {row['username']}: {exc}")
+
+        if getattr(ledger, "_storage_path", None):
+            try:
+                ledger.save_to_file()
+            except Exception as exc:
+                logger.warning(f"Failed to persist restored ledger to file: {exc}")
+
+    is_valid, _ = ledger.verify_integrity()
+    return {
+        "status": "restored",
+        "valid": is_valid,
+        "total_records": len(ledger),
+    }
 
 
 # --------------------------------------------------
@@ -697,8 +826,9 @@ def registration_verify(body: RegistrationVerifyRequest):
         verification = verify_registration_response(
             credential=body.credential,
             expected_challenge=expected_challenge,
-            expected_origin=ORIGIN,
+            expected_origin=list({ORIGIN, "http://localhost:8000", "http://127.0.0.1:8000"}),
             expected_rp_id=RP_ID,
+
             require_user_verification=True,
         )
     except Exception as exc:
@@ -847,8 +977,9 @@ def authentication_verify(
         verification = verify_authentication_response(
             credential=body.credential,
             expected_challenge=expected_challenge,
-            expected_origin=ORIGIN,
+            expected_origin=list({ORIGIN, "http://localhost:8000", "http://127.0.0.1:8000"}),
             expected_rp_id=RP_ID,
+
             credential_public_key=b64url_decode(stored["public_key"]),
             credential_current_sign_count=stored["sign_count"],
             require_user_verification=True,
@@ -905,8 +1036,3 @@ def authentication_verify(
         "username": username,
         "message": "Passwordless login successful.",
     }
-
-#/backend/router.py
-from backend.oidc.router import router as oidc_router
-
-app.include_router(oidc_router)
