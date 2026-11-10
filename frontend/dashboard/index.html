@@ -43,7 +43,7 @@
         <div class="topbar-title"><span class="eyebrow">ADMINISTRATION</span><h1 id="page-title">Overview</h1></div>
         <div class="topbar-actions">
           <div class="connection-chip" id="connection-chip" role="status" aria-live="polite"><span class="status-dot"></span><span id="connection-label">Checking API</span></div>
-          <a class="button button-tonal" href="/login" aria-label="Back to login"><span aria-hidden="true">&larr;</span><span>Back to login</span></a>
+          <button class="button button-tonal" id="logout-button" type="button">Sign out</button>
           <button class="button button-tonal" id="refresh-button" type="button"><span aria-hidden="true">↻</span><span>Refresh</span></button>
         </div>
       </header>
@@ -109,7 +109,7 @@
         <section class="page-section" id="section-events" aria-labelledby="events-heading" hidden>
           <div class="page-heading"><div><p class="eyebrow">AUDIT TELEMETRY</p><h2 id="events-heading">Security events</h2><p class="supporting-text">Authentication, policy, token revocation, and ledger-integrity activity. Admin access is required.</p></div></div>
           <section class="surface-card">
-            <form id="admin-token-form"><label class="field-label" for="admin-token">Administrator access token</label><div class="toolbar"><input id="admin-token" class="text-field mono" type="password" autocomplete="off" placeholder="Paste a role=admin JWT" required><button class="button button-primary" type="submit">Connect</button><button class="button button-text" id="clear-admin-token" type="button">Clear</button></div><p class="supporting-text">Token is held in page memory only. Obtain it by authenticating with a DID listed in <code>IDP_ADMIN_DIDS</code>.</p></form>
+            <p class="supporting-text">Administrator access is protected by your passkey and server-validated session.</p>
           </section>
           <div class="metrics-grid" id="event-metrics"><div class="metric-card"><span>Total events</span><strong id="event-total">â€”</strong></div><div class="metric-card"><span>Auth attempts</span><strong id="auth-attempt-count">â€”</strong></div><div class="metric-card"><span>Auth successes</span><strong id="auth-success-count">â€”</strong></div><div class="metric-card"><span>Auth failures</span><strong id="auth-failure-count">â€”</strong></div><div class="metric-card"><span>Access denied</span><strong id="access-denied-count">â€”</strong></div></div>
           <section class="surface-card">

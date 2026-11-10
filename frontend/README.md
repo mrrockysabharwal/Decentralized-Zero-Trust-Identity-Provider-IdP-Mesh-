@@ -16,7 +16,7 @@ The frontend is a framework-free administration dashboard for the Decentralized 
 - **Identities:** latest state per DID derived from the ledger. This is not a separate identity registry.
 - **Ledger audit:** ledger history, integrity result, CSV export, and the existing demonstration-only tamper simulation endpoint. The tamper endpoint changes the ledger; use it only with a disposable local ledger.
 - **Token security:** active public key and allowed scopes, plus token verification using `POST /api/v1/tokens/verify`. The input is cleared after submission and the submitted JWT is never rendered in the result. Token issuance requires a short-lived verified authentication session; owner revocation requires the signed token and matching JTI.
-- **Security events:** authenticated admin feed with counts, event type/outcome filters, pseudonymous DID references, and expandable event details. The short-lived admin JWT stays in dashboard page memory and is cleared when the page is reloaded or the user clears the token.
+- **Security events:** authenticated admin feed with counts, event type/outcome filters, pseudonymous DID references, and expandable event details. Dashboard access requires a passkey login for a DID listed in `IDP_ADMIN_DIDS`; the server stores the signed admin session in an HttpOnly cookie and validates it on dashboard and admin API requests.
 - **Service health:** displays fields returned by the application health endpoint; it does not invent per-service latency.
 
 ## Run the dashboard
@@ -30,5 +30,7 @@ python -m http.server 3000
 Open `http://localhost:3000/frontend/dashboard/`. For live data, run the FastAPI application separately, for example with `uvicorn app.main:app --port 8000`. When the page is served from another port, the dashboard requests the API at `http://localhost:8000/api/v1`.
 
 The dashboard refreshes every 30 seconds and has a manual refresh control. If all API routes are unavailable, it shows an unavailable state; it does not present demo telemetry as real data. No frontend framework or additional UI dependency is required.
+
+Open `/admin/login` to sign in as an administrator. Set `IDP_ADMIN_DIDS` in `.env` to the comma-separated DIDs authorized for admin access. A normal passkey login does not grant administrator privileges.
 
 The login experience is served at `http://localhost:8000/shad/login.html` (also available at `/login` and `/login.html`). Account creation is at `/register` and uses a passkey; the username becomes the account identifier. Successful login opens `/account`, which confirms the DID and checks access to the protected profile endpoint. The landing page is at `http://localhost:8000/shad/`.

@@ -4,7 +4,7 @@ const API_BASE = ['localhost:3000', '127.0.0.1:3000'].includes(window.location.h
   ? 'http://localhost:8000/api/v1'
   : '/api/v1';
 const REFRESH_INTERVAL = 30000;
-const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, events: null, eventSummary: null, adminToken: '', busy: false, noticeDismissed: false };
+const state = { ledger: null, audit: null, publicKey: null, scopes: null, health: null, events: null, eventSummary: null, busy: false, noticeDismissed: false };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -23,7 +23,8 @@ async function request(path, options = {}) {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
-      headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(state.adminToken ? { Authorization: `Bearer ${state.adminToken}` } : {}), ...(options.headers || {}) }
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) }
     });
     const type = response.headers.get('content-type') || '';
     const payload = type.includes('application/json') ? await response.json() : null;
@@ -188,16 +189,9 @@ async function refreshAll() {
   state.publicKey = results[2].status === 'fulfilled' ? results[2].value : null;
   state.scopes = results[3].status === 'fulfilled' && Array.isArray(results[3].value?.scopes) ? results[3].value.scopes : null;
   state.health = results[4].status === 'fulfilled' ? results[4].value : null;
-  if (state.adminToken) {
-    const [summary, events] = await Promise.allSettled([
-      request('/admin/dashboard'), loadEvents()
-    ]);
-    state.eventSummary = summary.status === 'fulfilled' ? summary.value : null;
-    state.events = events.status === 'fulfilled' ? events.value : null;
-  } else {
-    state.eventSummary = null;
-    state.events = null;
-  }
+  const [summary, events] = await Promise.allSettled([request('/admin/dashboard'), loadEvents()]);
+  state.eventSummary = summary.status === 'fulfilled' ? summary.value : null;
+  state.events = events.status === 'fulfilled' ? events.value : null;
   const live = results.some(result => result.status === 'fulfilled');
   const firstError = results.find(result => result.status === 'rejected')?.reason;
   setConnection(live, firstError?.name === 'AbortError' ? 'The API request timed out. Check that the backend is running.' : (firstError?.message || 'Could not reach the FastAPI service.'));
@@ -225,11 +219,6 @@ function renderSecurityEvents() {
   $('#auth-failure-count').textContent = summary ? String(summary.authentication_failures) : '—';
   $('#access-denied-count').textContent = summary ? String(summary.access_denied) : '—';
   const body = $('#security-events-body');
-  if (!state.adminToken) {
-    $('#event-count').textContent = 'Administrator token required';
-    body.innerHTML = '<tr><td colspan="6">Connect with an administrator token to load the audit feed.</td></tr>';
-    return;
-  }
   if (!state.events) {
     $('#event-count').textContent = 'Events unavailable';
     body.innerHTML = '<tr><td colspan="6">Could not load events. Check the token role and API connection.</td></tr>';
@@ -247,7 +236,6 @@ function renderSecurityEvents() {
 }
 
 async function refreshEvents() {
-  if (!state.adminToken) { renderSecurityEvents(); return; }
   try {
     const [summary, events] = await Promise.all([request('/admin/dashboard'), loadEvents()]);
     state.eventSummary = summary;
@@ -320,21 +308,14 @@ async function simulateTamper(event) {
 }
 
 function bindEvents() {
-  $('#admin-token').value = state.adminToken;
   $$('.nav-link').forEach(link => link.addEventListener('click', () => navigate(link.dataset.section)));
   window.addEventListener('hashchange', () => navigate(location.hash.slice(1)));
   $('#refresh-button').addEventListener('click', refreshAll);
   $('#audit-button').addEventListener('click', async () => { await refreshAll(); showToast(state.audit ? 'Integrity audit refreshed.' : 'Integrity audit is unavailable.', state.audit?.valid ? 'success' : 'warning'); });
   $('#health-refresh-button').addEventListener('click', refreshAll);
-  $('#admin-token-form').addEventListener('submit', async event => {
-    event.preventDefault();
-    state.adminToken = $('#admin-token').value.trim();
-    await refreshEvents();
-  });
-  $('#clear-admin-token').addEventListener('click', () => {
-    state.adminToken = '';
-    $('#admin-token').value = '';
-    renderSecurityEvents();
+  $('#logout-button').addEventListener('click', async () => {
+    try { await fetch(`${API_BASE}/admin/logout`, { method: 'POST', credentials: 'same-origin' }); }
+    finally { window.location.assign('/admin/login'); }
   });
   $('#events-refresh-button').addEventListener('click', refreshEvents);
   $('#event-type-filter').addEventListener('change', refreshEvents);

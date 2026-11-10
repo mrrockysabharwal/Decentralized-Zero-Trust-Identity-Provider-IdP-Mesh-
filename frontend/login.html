@@ -13,7 +13,7 @@
         rel="stylesheet">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="login.css">
+    <link rel="stylesheet" href="/shad/login.css">
 </head>
 
 <body class="login-page">
@@ -65,7 +65,7 @@
             <div class="login-card">
                 <div class="login-nav-actions">
                     <a href="/shad/" class="back-home">← Back to Home</a>
-                    <a href="/dashboard/" class="back-home">Open Admin Dashboard</a>
+                    <a href="/admin/login" class="back-home">Administrator sign in</a>
                 </div>
 
                 <div class="login-icon">
@@ -76,12 +76,13 @@
                     ZERO TRUST IDENTITY MESH
                 </span>
 
-                <h2>Passwordless Login</h2>
+                <h2 id="login-heading">Passwordless Login</h2>
 
                 <p class="login-subtitle">
                     Sign in securely using your device's authenticator
                     or security key. No password required.
                 </p>
+                <p id="admin-login-note" class="login-subtitle" hidden>Administrator access is granted only to passkey identities configured in IDP_ADMIN_DIDS.</p>
 
 
                 <!-- PASSWORDLESS FORM -->
@@ -296,6 +297,7 @@
                 throw new Error(
                     result.message ||
                     result.error ||
+                    result.detail ||
                     "The server could not complete your request."
                 );
             }
@@ -340,6 +342,13 @@
 
 
         // LOG IN USING A PASSKEY
+        const adminLogin = window.location.pathname === "/admin/login";
+        if (adminLogin) {
+            document.title = "Administrator Sign In | TrustMesh";
+            document.getElementById("login-heading").textContent = "Administrator Sign In";
+            document.getElementById("admin-login-note").hidden = false;
+        }
+
         loginButton.addEventListener("click", async function () {
             const username = getUsername();
 
@@ -435,7 +444,7 @@
                     }
                 );
 
-                if (result.access_token) {
+                if (result.access_token && !adminLogin) {
                     sessionStorage.setItem("idp_access_token", result.access_token);
                     sessionStorage.setItem("idp_authenticated_did", result.did);
                     sessionStorage.setItem("idp_access_token_jti", result.jti || "");
@@ -448,8 +457,22 @@
                         JSON.stringify(result.scope || ["read:profile"])
                     );
                 }
-                if (result.session_token) {
+                if (result.session_token && !adminLogin) {
                     sessionStorage.setItem("idp_auth_session", result.session_token);
+                }
+
+                if (adminLogin) {
+                    const adminResponse = await fetch("/api/v1/admin/session", {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: { Authorization: `Bearer ${result.access_token}` }
+                    });
+                    const adminResult = await adminResponse.json().catch(() => ({}));
+                    if (!adminResponse.ok) {
+                        throw new Error(adminResult.detail || "This passkey identity is not authorized for administrator access.");
+                    }
+                    window.location.assign("/dashboard/");
+                    return;
                 }
 
                 showMessage(

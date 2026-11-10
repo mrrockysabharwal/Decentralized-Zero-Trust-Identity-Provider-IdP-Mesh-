@@ -31,14 +31,15 @@ Environment variables (optional — picked up via python-dotenv .env file):
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 # ── Load .env before any env-var reads ───────────────────────────────────────
@@ -76,6 +77,7 @@ import app.modules.did.router as _did_router_module
 # ── Module D (Member 6) — Admin Dashboard API ────────────────────────────────
 from app.modules.admin import admin_router
 import app.modules.admin.router as _admin_router_module
+from app.modules.admin.authorization import require_admin, verify_admin_token
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -229,6 +231,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def canonicalize_local_webauthn_host(request: Request, call_next):
+    """Keep local passkey ceremonies on the configured localhost RP domain."""
+    rp_id = os.getenv("WEBAUTHN_RP_ID", "localhost").strip().lower()
+    if rp_id == "localhost" and request.url.hostname in {"127.0.0.1", "::1"}:
+        port = f":{request.url.port}" if request.url.port else ""
+        canonical_url = request.url.replace(netloc=f"localhost{port}")
+        return RedirectResponse(url=str(canonical_url), status_code=307)
+    return await call_next(request)
+
 # ── CORS Middleware ───────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -259,10 +272,9 @@ app.include_router(tokens_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 
 
-# ── Static Dashboard Mount (Member 6 / Albin-Gervasis) ───────────────────────
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend" / "dashboard"
-if _frontend_dir.exists():
-    app.mount("/dashboard", StaticFiles(directory=str(_frontend_dir), html=True), name="dashboard")
+_dashboard_index = _frontend_dir / "index.html"
+_admin_login_page = Path(__file__).resolve().parent.parent / "frontend" / "login.html"
 
 # Shad's passwordless login site and API share the admin app's server.
 app.include_router(shad_ui_router, prefix="/shad")
@@ -312,12 +324,69 @@ async def account_page_alias() -> RedirectResponse:
 
 @app.get(
     "/",
-    summary="Service info & liveness",
-    tags=["Health"],
-    response_class=JSONResponse,
+    summary="TrustMesh administration dashboard",
+    include_in_schema=False,
 )
-async def root() -> Dict[str, Any]:
-    """Root endpoint — returns service metadata and currently active modules."""
+async def root() -> RedirectResponse:
+    """Send browser visitors to the administration dashboard."""
+    return RedirectResponse(url="/dashboard/", status_code=307)
+
+
+def _dashboard_response(request: Request):
+    try:
+        verify_admin_token(request.cookies.get("idp_admin_session"))
+    except HTTPException:
+        return RedirectResponse(url="/admin/login", status_code=303)
+    return FileResponse(_dashboard_index)
+
+
+@app.get("/dashboard", include_in_schema=False)
+@app.get("/dashboard/", include_in_schema=False)
+@app.get("/dashboard/index.html", include_in_schema=False)
+async def dashboard_page(request: Request):
+    """Serve the dashboard only after validating the administrator session."""
+    return _dashboard_response(request)
+
+
+@app.get("/admin/login", include_in_schema=False)
+async def admin_login_page():
+    """Serve the passkey sign-in screen configured to require administrator access."""
+    return FileResponse(_admin_login_page)
+
+
+@app.post("/api/v1/admin/session", include_in_schema=False)
+async def create_admin_browser_session(
+    request: Request,
+    response: Response,
+    claims: dict = Depends(require_admin),
+):
+    """Exchange a verified admin bearer JWT for an HttpOnly browser cookie."""
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="A bearer token is required to start an admin session.")
+    max_age = max(0, int(claims["exp"] - time.time()))
+    response.set_cookie(
+        key="idp_admin_session",
+        value=token,
+        max_age=max_age,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": True, "expires_in": max_age}
+
+
+@app.post("/api/v1/admin/logout", include_in_schema=False)
+async def clear_admin_browser_session(response: Response):
+    response.delete_cookie("idp_admin_session", path="/", httponly=True, samesite="strict")
+    return {"authenticated": False}
+
+
+@app.get("/api/info", include_in_schema=False)
+async def service_metadata() -> Dict[str, Any]:
+    """Return service metadata and the active module endpoint map."""
     return {
         "service": "Decentralized Zero-Trust IdP Mesh",
         "version": "1.0.0",
@@ -411,6 +480,12 @@ async def root() -> Dict[str, Any]:
             },
         },
     }
+
+
+# Mount dashboard assets after the guarded HTML routes so index.html cannot be
+# fetched through StaticFiles without passing the administrator check.
+if _frontend_dir.exists():
+    app.mount("/dashboard", StaticFiles(directory=str(_frontend_dir)), name="dashboard-assets")
 
 
 @app.get(
