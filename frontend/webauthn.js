@@ -1,14 +1,15 @@
 
 const API = {
-  registerOptions: "/webauthn/register/options",
-  registerVerify: "/webauthn/register/verify",
-  loginOptions: "/webauthn/login/options",
-  loginVerify: "/webauthn/login/verify"
+  registerOptions: "/api/v1/webauthn/register/options",
+  registerVerify: "/api/v1/webauthn/register/verify",
+  loginOptions: "/api/v1/webauthn/login/options",
+  loginVerify: "/api/v1/webauthn/login/verify"
 };
 
 const usernameInput = document.getElementById("username");
 const registerBtn = document.getElementById("registerBtn");
 const loginBtn = document.getElementById("loginBtn");
+const registerForm = document.getElementById("registerForm");
 const statusBox = document.getElementById("status");
 
 function setStatus(message, state = "info") {
@@ -70,6 +71,8 @@ async function postJSON(url, body) {
     const message =
       typeof data.detail === "string"
         ? data.detail
+        : typeof data.message === "string"
+        ? data.message
         : `Request failed (${response.status}).`;
 
     throw new Error(message);
@@ -180,7 +183,7 @@ function credentialToJSON(credential) {
 
 function setBusy(isBusy) {
   registerBtn.disabled = isBusy;
-  loginBtn.disabled = isBusy;
+  if (loginBtn) loginBtn.disabled = isBusy;
 }
 
 async function registerPasskey() {
@@ -273,10 +276,19 @@ async function runAction(action) {
   }
 }
 
-registerBtn.addEventListener("click", () => {
-  runAction(registerPasskey);
-});
+if (registerForm) {
+  registerForm.addEventListener("submit", event => {
+    event.preventDefault();
+    runAction(registerPasskey);
+  });
+} else if (registerBtn) {
+  registerBtn.addEventListener("click", () => {
+    runAction(registerPasskey);
+  });
+}
 
-loginBtn.addEventListener("click", () => {
-  runAction(loginWithPasskey);
-});
+if (loginBtn) {
+  loginBtn.addEventListener("click", () => {
+    runAction(loginWithPasskey);
+  });
+}

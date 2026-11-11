@@ -33,7 +33,7 @@ class SimulatedLedger:
         auto_genesis: bool = True,
         storage_path: Optional[str] = None,
     ):
-        self._lock = threading.RLock()
+        self._lock = threading.RLock()  # Re-entrant: allows nested acquisitions on the same thread
         self._chain: List[LedgerRecord] = []
         self._storage_path = storage_path
 
@@ -137,8 +137,22 @@ class SimulatedLedger:
 
             self._chain.append(record)
             if self._storage_path:
-                self.save_to_file(self._storage_path)
+                self._save_unlocked(self._storage_path)
             return record
+
+    def _save_unlocked(self, target_path: str) -> None:
+        """Write ledger to disk WITHOUT acquiring the lock.
+
+        Must only be called from within a section that already holds self._lock.
+        """
+        records_data = [rec.model_dump() for rec in self._chain]
+
+        parent_dir = os.path.dirname(target_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
+        with open(target_path, "w", encoding="utf-8") as f:
+            json.dump(records_data, f, indent=2)
 
     def save_to_file(self, filepath: Optional[str] = None) -> None:
         """Serialize and save the current ledger state to a JSON file.
@@ -151,15 +165,7 @@ class SimulatedLedger:
             raise ValueError("No filepath provided and self._storage_path is not set.")
 
         with self._lock:
-            records_data = [rec.model_dump() for rec in self._chain]
-            
-            # Ensure parent directory exists
-            parent_dir = os.path.dirname(target_path)
-            if parent_dir:
-                os.makedirs(parent_dir, exist_ok=True)
-
-            with open(target_path, "w", encoding="utf-8") as f:
-                json.dump(records_data, f, indent=2)
+            self._save_unlocked(target_path)
 
     def load_from_file(self, filepath: str) -> None:
         """Load and deserialize ledger records from a JSON file, validating chain integrity.

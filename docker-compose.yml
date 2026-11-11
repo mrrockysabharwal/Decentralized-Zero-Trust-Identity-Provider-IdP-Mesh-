@@ -1,0 +1,59 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      EPHEMERAL_STATE_BACKEND: ${EPHEMERAL_STATE_BACKEND:-redis}
+      LEDGER_STORAGE_PATH: /app/data/ledger.json
+      AUDIT_DB_PATH: /app/data/security_events.sqlite3
+      WEBAUTHN_DB_PATH: /app/data/webauthn.sqlite3
+      DID_REGISTRY_PATH: /app/data/did_registry.json
+      TOKEN_KEY_DIR: /app/data/token_keys
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-https://localhost}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-localhost}
+    volumes:
+      - idp_data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    command:
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${TRAEFIK_DYNAMIC_CONFIG:-./traefik/dynamic.yml}:/etc/traefik/dynamic.yml:ro
+      - ${TLS_CERT_PATH:-./traefik/certs/dev-localhost.crt}:/etc/traefik/certs/tls.crt:ro
+      - ${TLS_KEY_PATH:-./traefik/certs/dev-localhost-key.pem}:/etc/traefik/certs/tls.key:ro
+
+volumes:
+  idp_data:
+  redis_data:

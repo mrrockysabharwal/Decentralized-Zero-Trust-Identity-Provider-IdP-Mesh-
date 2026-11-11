@@ -9,31 +9,23 @@ verification, session/token issuance, rate limiting, and other security controls
 import base64
 import hashlib
 import json
-import logging
 import os
 import secrets
 import sqlite3
 import time
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import cbor2
-from fastapi import Cookie, FastAPI, HTTPException, Response
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.modules.ledger.router import router as ledger_router
 from app.modules.ledger.router import get_ledger
 from app.modules.ledger.models import LedgerOperation
 from app.modules.ledger.hasher import hash_did_document
-from backend.oidc.router import router as oidc_router
-from backend.oidc.service import (
-    validate_login_session,
-    initialize_database,
-    register_client,
-)
 
 
 from webauthn import (
@@ -54,7 +46,7 @@ from webauthn.helpers.structs import (
 # --------------------------------------------------
 # Configuration
 # --------------------------------------------------
-
+app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
 FRONTEND_DIR = PROJECT_DIR / "frontend"
@@ -65,32 +57,15 @@ DB_PATH = Path(
 
 RP_ID = os.getenv("WEBAUTHN_RP_ID", "localhost")
 RP_NAME = os.getenv("WEBAUTHN_RP_NAME", "Zero Trust Identity Mesh")
-ORIGIN = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000")
+_origin_env = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000,https://localhost")
+_origin_list = [o.strip() for o in _origin_env.split(",") if o.strip()]
+ORIGIN = _origin_list[0] if len(_origin_list) == 1 else _origin_list
 
 CHALLENGE_TTL_SECONDS = 300
 
-logger = logging.getLogger("trustmesh")
-logging.basicConfig(level=logging.INFO)
-
-app = FastAPI(
-    title="Zero Trust Identity Mesh - WebAuthn API",
-    version="1.1.0",
-)
-
-app.include_router(ledger_router)
-app.include_router(oidc_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=list({
-        ORIGIN,
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    }),
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
-)
+ui_router = APIRouter(tags=["Shad Login UI"])
+passkey_router = APIRouter(prefix="/webauthn", tags=["Native Passkeys"])
+shad_data_router = APIRouter(prefix="/shad", tags=["Shad Identity Data"])
 
 
 # --------------------------------------------------
@@ -169,13 +144,6 @@ def init_db():
                 doc_hash TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS login_sessions (
-                session_token_hash TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                FOREIGN KEY(username) REFERENCES users(username)
-            );
             """
         )
 
@@ -189,33 +157,14 @@ def init_db():
         if "did" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN did TEXT")
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    initialize_database()
     try:
-        register_client(
-            client_id="trustmesh-client-app",
-            redirect_uris=[
-                "http://localhost:3000/callback",
-                "http://localhost:8000/dashboard.html",
-                "http://127.0.0.1:8000/dashboard.html",
-            ],
-        )
+        from backend.oidc.service import register_client
         register_client(
             client_id="trustmesh-demo-client",
-            redirect_uris=[
-                "http://localhost:3000/callback",
-                "https://app.example.com/callback",
-            ],
+            redirect_uris=["http://localhost:3000/callback", "http://127.0.0.1:3000/callback"],
         )
-        logger.info("TrustMesh database and demo OIDC clients initialized.")
-    except Exception as exc:
-        logger.warning(f"Could not seed default OIDC clients: {exc}")
-    yield
-
-app.router.lifespan_context = lifespan
+    except Exception:
+        pass
 
 
 # --------------------------------------------------
@@ -460,6 +409,12 @@ def sync_did_document(username: str, did: str) -> str:
             ),
         )
 
+    # Keep the core DID API's in-process registry in step with persisted Shad DIDs.
+    from app.modules.identity.did_service import _did_registry, persist_registry
+
+    _did_registry[did] = document
+    persist_registry()
+
     ledger = get_ledger()
     latest = ledger.get_latest_record(did)
 
@@ -488,6 +443,60 @@ def sync_did_document(username: str, did: str) -> str:
         )
 
     return document_hash
+
+
+def sync_user_credentials_to_core(username: str) -> int:
+    """Expose Shad passkeys through Midhun's shared credential services."""
+    from app.modules.webauthn.router import _credential_store
+
+    user = get_user(username)
+    if user is None:
+        return 0
+
+    did = user["did"] or ensure_user_did(username)
+    synced = 0
+    for row in get_credentials(username):
+        credential_id = row["credential_id"]
+        if _credential_store.credential_exists(credential_id):
+            continue
+
+        try:
+            transports = json.loads(row["transports"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            transports = []
+
+        _credential_store.register(
+            did=did,
+            credential_id=credential_id,
+            public_key_bytes=b64url_decode(row["public_key"]),
+            device_info={"source": "shad-passkey", "transports": transports},
+            sign_count=int(row["sign_count"] or 0),
+        )
+        synced += 1
+
+    return synced
+
+
+def sync_credentials_to_core() -> int:
+    """Load persisted Shad credentials into Midhun's in-process stores."""
+    with db_connection() as conn:
+        usernames = [
+            row["username"]
+            for row in conn.execute(
+                "SELECT DISTINCT username FROM credentials ORDER BY username"
+            ).fetchall()
+        ]
+
+    synced = 0
+    for username in usernames:
+        user = get_user(username)
+        if user is None:
+            continue
+        did = user["did"] or ensure_user_did(username)
+        sync_did_document(username, did)
+        synced += sync_user_credentials_to_core(username)
+
+    return synced
 
 
 # --------------------------------------------------
@@ -570,139 +579,61 @@ def frontend_file(filename: str) -> FileResponse:
     return FileResponse(path)
 
 
-@app.get("/", include_in_schema=False)
+@ui_router.get("/", include_in_schema=False)
 def home():
     return frontend_file("index.html")
 
 
-@app.get("/login.html", include_in_schema=False)
+@ui_router.get("/login.html", include_in_schema=False)
 def login_page():
     return frontend_file("login.html")
 
 
-@app.get("/register.html", include_in_schema=False)
-def register_page():
-    return frontend_file("login.html")
+@ui_router.get("/register.html", include_in_schema=False)
+def registration_page():
+    return frontend_file("register.html")
 
 
-@app.get("/dashboard.html", include_in_schema=False)
-@app.get("/dashboard", include_in_schema=False)
-def dashboard_page():
-    return frontend_file("dashboard.html")
+@ui_router.get("/account.html", include_in_schema=False)
+def account_page():
+    return frontend_file("account.html")
 
 
-@app.get("/api/me")
-def get_current_user_profile(
-    tm_login_session: Optional[str] = Cookie(None),
-):
-    """Get profile information for the authenticated user session."""
-    if not tm_login_session:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    session = validate_login_session(tm_login_session)
-    if not session:
-        raise HTTPException(status_code=401, detail="Session expired or invalid")
-
-    username = session["username"]
-    user = get_user(username)
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    did = ensure_user_did(username)
-    credentials = get_credentials(username)
-
-    return {
-        "authenticated": True,
-        "username": username,
-        "did": did,
-        "credential_count": len(credentials),
-        "created_at": user["created_at"] if "created_at" in user.keys() else int(time.time()),
-    }
-
-
-@app.post("/api/logout")
-def logout(response: Response):
-    """Log out the current user by clearing the session cookie."""
-    response.delete_cookie(
-        key="tm_login_session",
-        path="/",
-    )
-    return {"authenticated": False, "message": "Successfully logged out."}
-
-
-
-
-@app.get("/style.css", include_in_schema=False)
+@ui_router.get("/style.css", include_in_schema=False)
 def homepage_stylesheet():
     return frontend_file("style.css")
 
 
-@app.get("/login.css", include_in_schema=False)
+@ui_router.get("/login.css", include_in_schema=False)
 def login_stylesheet():
     return frontend_file("login.css")
 
 
-@app.get("/webauthn.js", include_in_schema=False)
+@ui_router.get("/account.css", include_in_schema=False)
+def account_stylesheet():
+    return frontend_file("account.css")
+
+
+@ui_router.get("/account.js", include_in_schema=False)
+def account_script():
+    return frontend_file("account.js")
+
+
+@ui_router.get("/webauthn.js", include_in_schema=False)
 def frontend_script():
     return frontend_file("webauthn.js")
 
 
-@app.get("/health")
+@ui_router.get("/health")
 def health():
-    ledger = get_ledger()
-    is_valid, error = ledger.verify_integrity()
-    return {
-        "status": "ok",
-        "service": "TrustMesh Decentralized Zero-Trust IdP",
-        "webauthn": "enabled",
-        "oidc": "enabled",
-        "ledger": {
-            "total_records": len(ledger),
-            "valid": is_valid,
-            "error": error,
-        },
-    }
-
-
-@app.post("/api/ledger/restore")
-def restore_ledger_chain():
-    """Restore the ledger chain to an untampered, verified state.
-    
-    Used by demo/audit console to reset state after a simulated tamper attack.
-    """
-    ledger = get_ledger()
-    with ledger._lock:
-        ledger._chain.clear()
-        ledger._create_genesis_record()
-
-        # Re-anchor existing registered users' DIDs
-        with db_connection() as conn:
-            rows = conn.execute("SELECT username, did FROM users WHERE did IS NOT NULL").fetchall()
-            for row in rows:
-                try:
-                    sync_did_document(row["username"], row["did"])
-                except Exception as exc:
-                    logger.warning(f"Failed to re-anchor DID for {row['username']}: {exc}")
-
-        if getattr(ledger, "_storage_path", None):
-            try:
-                ledger.save_to_file()
-            except Exception as exc:
-                logger.warning(f"Failed to persist restored ledger to file: {exc}")
-
-    is_valid, _ = ledger.verify_integrity()
-    return {
-        "status": "restored",
-        "valid": is_valid,
-        "total_records": len(ledger),
-    }
+    return {"status": "ok", "service": "webauthn"}
 
 
 # --------------------------------------------------
 # DID resolution
 # --------------------------------------------------
 
-@app.get("/did/{did}")
+@shad_data_router.get("/did/{did}")
 def resolve_did(did: str):
     """Resolve a stored DID document and compare it with the ledger."""
 
@@ -752,10 +683,16 @@ def resolve_did(did: str):
 # Registration: create options
 # --------------------------------------------------
 
-@app.post("/webauthn/register/options")
+@passkey_router.post("/register/options")
 def registration_options(body: UserRequest):
     username = normalize_username(body.username)
     user = get_user(username)
+
+    if user is not None and get_credentials(username):
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists for this username. Log in instead.",
+        )
 
     if user is None:
         user_handle = secrets.token_bytes(32)
@@ -810,7 +747,7 @@ def registration_options(body: UserRequest):
 # Registration: verify response and sync DID
 # --------------------------------------------------
 
-@app.post("/webauthn/register/verify")
+@passkey_router.post("/register/verify")
 def registration_verify(body: RegistrationVerifyRequest):
     username = normalize_username(body.username)
 
@@ -826,9 +763,8 @@ def registration_verify(body: RegistrationVerifyRequest):
         verification = verify_registration_response(
             credential=body.credential,
             expected_challenge=expected_challenge,
-            expected_origin=list({ORIGIN, "http://localhost:8000", "http://127.0.0.1:8000"}),
+            expected_origin=ORIGIN,
             expected_rp_id=RP_ID,
-
             require_user_verification=True,
         )
     except Exception as exc:
@@ -890,6 +826,10 @@ def registration_verify(body: RegistrationVerifyRequest):
             ) from exc
 
     document_hash = sync_did_document(username, did)
+    sync_user_credentials_to_core(username)
+    from app.modules.audit.event_store import record_security_event
+    record_security_event(event_type="credential_registration", outcome="success", severity="low",
+                          did=did, reason="native_webauthn_credential_registered")
 
     return {
         "verified": True,
@@ -903,7 +843,7 @@ def registration_verify(body: RegistrationVerifyRequest):
 # Login: create options
 # --------------------------------------------------
 
-@app.post("/webauthn/login/options")
+@passkey_router.post("/login/options")
 def authentication_options(body: UserRequest):
     username = normalize_username(body.username)
 
@@ -936,11 +876,8 @@ def authentication_options(body: UserRequest):
 # Login: verify response
 # --------------------------------------------------
 
-@app.post("/webauthn/login/verify")
-def authentication_verify(
-    body: AuthenticationVerifyRequest,
-    response: Response,
-):
+@passkey_router.post("/login/verify")
+def authentication_verify(body: AuthenticationVerifyRequest):
     username = normalize_username(body.username)
 
     credential_id_value = (
@@ -963,7 +900,6 @@ def authentication_verify(
             """,
             (credential_id_value, username),
         ).fetchone()
-    
 
     if stored is None:
         raise HTTPException(
@@ -977,14 +913,16 @@ def authentication_verify(
         verification = verify_authentication_response(
             credential=body.credential,
             expected_challenge=expected_challenge,
-            expected_origin=list({ORIGIN, "http://localhost:8000", "http://127.0.0.1:8000"}),
+            expected_origin=ORIGIN,
             expected_rp_id=RP_ID,
-
             credential_public_key=b64url_decode(stored["public_key"]),
             credential_current_sign_count=stored["sign_count"],
             require_user_verification=True,
         )
     except Exception as exc:
+        from app.modules.audit.event_store import record_security_event
+        record_security_event(event_type="authentication", outcome="failure", severity="medium",
+                              reason="native_webauthn_assertion_failed")
         raise HTTPException(
             status_code=401,
             detail="Authentication failed. Please try again.",
@@ -1002,37 +940,42 @@ def authentication_verify(
                 credential_id_value,
             ),
         )
-        # Create a short-lived authenticated session
-    session_token = secrets.token_urlsafe(32)
 
-    session_token_hash = hashlib.sha256(
-        session_token.encode("utf-8")
-    ).hexdigest()
+    user = get_user(username)
+    did = user["did"] or ensure_user_did(username)
+    sync_user_credentials_to_core(username)
 
-    session_expires_at = int(time.time()) + 900
+    # Bridge verified browser WebAuthn to the core DID-bound auth session.
+    from app.modules.webauthn.session_store import auth_session_store
+    from app.modules.tokens.models import TokenIssueRequest
+    from app.modules.tokens.router import issue_access_token
 
-    with db_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO login_sessions
-            (session_token_hash, username, expires_at)
-            VALUES (?, ?, ?)
-            """,
-            (session_token_hash, username, session_expires_at),
-        )
-
-    response.set_cookie(
-        key="tm_login_session",
-        value=session_token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=900,
-        path="/",
+    session_token, session_ttl = auth_session_store.create(did)
+    access_token = issue_access_token(
+        TokenIssueRequest(
+            did=did,
+            scope=["read:profile"],
+            require_webauthn=True,
+        ),
+        authorization=f"Bearer {session_token}",
     )
+    from app.modules.audit.event_store import record_security_event
+    record_security_event(event_type="authentication", outcome="success", severity="low",
+                          did=did, reason="native_webauthn_assertion_verified")
 
     return {
         "authenticated": True,
         "username": username,
-        "message": "Passwordless login successful.",
+        "did": did,
+        "session_token": session_token,
+        "session_expires_in": session_ttl,
+        "access_token": access_token.access_token,
+        "jti": access_token.jti,
+        "token_type": access_token.token_type,
+        "expires_in": access_token.expires_in,
+        "scope": access_token.scope,
+        "message": "Passwordless login successful. A Midhun API access token was issued.",
     }
+
+#/backend/router.py
+from backend.oidc.router import router as shad_oidc_router

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#07111f">
+  <title>Your account | TrustMesh</title>
+  <link rel="stylesheet" href="login.css">
+  <link rel="stylesheet" href="account.css">
+</head>
+<body class="login-page">
+  <main class="login-container account-container">
+    <section class="login-info" aria-label="TrustMesh identity">
+      <a href="/shad/" class="brand-name">Trust<span>Mesh</span></a>
+      <div class="info-content">
+        <span class="security-badge">Authenticated identity</span>
+        <h1>Your Identity.<br><span>Your Control.</span></h1>
+        <p>Your passkey verified this login. The identity and protected-resource check below show how your access token is used by the mesh.</p>
+        <div class="security-points">
+          <div>✓ Passkey authentication verified</div>
+          <div>✓ Decentralized identifier linked</div>
+          <div>✓ Protected API access checked</div>
+        </div>
+      </div>
+      <p class="copyright">© 2026 TrustMesh</p>
+    </section>
+
+    <section class="login-form-section" aria-labelledby="accountTitle">
+      <div class="login-card account-card">
+        <div class="login-nav-actions">
+          <a href="/shad/" class="back-home">← TrustMesh Home</a>
+        </div>
+        <div class="login-icon" aria-hidden="true">✓</div>
+        <span class="form-eyebrow">ZERO TRUST IDENTITY MESH</span>
+        <h2 id="accountTitle">You’re signed in</h2>
+        <p class="login-subtitle">Your authentication created a DID-bound session and a short-lived API access token.</p>
+
+        <div class="account-facts">
+          <section class="account-fact">
+            <span class="account-fact-label">Your decentralized ID</span>
+            <code id="accountDid">Loading…</code>
+          </section>
+          <section class="account-fact account-fact-pair">
+            <div><span class="account-fact-label">Token scope</span><strong id="tokenScope">Checking…</strong></div>
+            <div><span class="account-fact-label">Token expires</span><strong id="tokenExpiry">Checking…</strong></div>
+          </section>
+        </div>
+
+        <section id="profileCheck" class="account-resource" aria-live="polite">
+          <span class="account-fact-label">Protected API resource</span>
+          <strong id="profileTitle">Checking access…</strong>
+          <p id="profileMessage">The app is using your access token to request your protected profile.</p>
+        </section>
+
+        <p id="accountMessage" class="login-message show" role="status" aria-live="polite">Your account session is active in this browser tab.</p>
+        <button type="button" id="signOutButton" class="passkey-login-button">Sign out and revoke token</button>
+      </div>
+    </section>
+  </main>
+  <script src="account.js" defer></script>
+</body>
+</html>
