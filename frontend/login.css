@@ -142,8 +142,9 @@
 ================================= */
 
 .login-card {
+    box-sizing: border-box;
     width: 100%;
-    max-width: 430px;
+    max-width: 560px;
     padding: 35px;
 
     background: rgba(15, 27, 48, 0.85);
@@ -156,6 +157,14 @@
     transition:
         border-color 0.3s ease,
         box-shadow 0.3s ease;
+}
+
+.login-nav-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 22px;
 }
 
 .login-card:hover {

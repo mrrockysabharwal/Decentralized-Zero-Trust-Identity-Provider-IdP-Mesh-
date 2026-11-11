@@ -1,0 +1,78 @@
+.account-card {
+  max-width: 620px;
+}
+
+.account-facts {
+  display: grid;
+  gap: 12px;
+  margin: 24px 0 16px;
+}
+
+.account-fact,
+.account-resource {
+  padding: 15px;
+  background: rgba(7, 17, 31, 0.72);
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 12px;
+}
+
+.account-fact-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.account-fact code {
+  display: block;
+  color: #bfdbfe;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.account-fact-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.account-fact strong {
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.account-resource strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 15px;
+}
+
+.account-resource p {
+  margin: 7px 0 0;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.account-resource[data-state="success"] {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.account-resource[data-state="error"] {
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.account-card > .login-message {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 480px) {
+  .account-fact-pair {
+    grid-template-columns: 1fr;
+  }
+}
