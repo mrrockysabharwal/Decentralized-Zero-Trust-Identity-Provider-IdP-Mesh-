@@ -274,7 +274,10 @@ app.include_router(admin_router, prefix="/api/v1")
 
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend" / "dashboard"
 _dashboard_index = _frontend_dir / "index.html"
-_admin_login_page = Path(__file__).resolve().parent.parent / "frontend" / "login.html"
+_frontend_root = Path(__file__).resolve().parent.parent / "frontend"
+_landing_page = _frontend_root / "index.html"
+_landing_style = _frontend_root / "style.css"
+_admin_login_page = _frontend_root / "login.html"
 
 # Shad's passwordless login site and API share the admin app's server.
 app.include_router(shad_ui_router, prefix="/shad")
@@ -324,12 +327,22 @@ async def account_page_alias() -> RedirectResponse:
 
 @app.get(
     "/",
-    summary="TrustMesh administration dashboard",
+    summary="TrustMesh Home Landing Page",
     include_in_schema=False,
 )
-async def root() -> RedirectResponse:
-    """Send browser visitors to the administration dashboard."""
-    return RedirectResponse(url="/dashboard/", status_code=307)
+@app.get("/index.html", include_in_schema=False)
+async def root(request: Request):
+    """Serve the TrustMesh homepage to browser visitors, or service metadata to API clients."""
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept and "text/html" not in accept:
+        return await service_metadata()
+    return FileResponse(_landing_page)
+
+
+@app.get("/style.css", include_in_schema=False)
+async def landing_stylesheet():
+    """Serve stylesheet for the home landing page."""
+    return FileResponse(_landing_style)
 
 
 def _dashboard_response(request: Request):
